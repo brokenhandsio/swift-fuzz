@@ -24,5 +24,9 @@ let package = Package(
             )
         ),
         .testTarget(name: "FuzzingTests", dependencies: ["Fuzzing"]),
+        // Plugin targets cannot be imported, so the command plugin's argument
+        // parser is symlinked into this target and compiled a second time.
+        // Same file on disk, so the two copies cannot drift.
+        .testTarget(name: "FuzzCommandPluginTests"),
     ]
 )

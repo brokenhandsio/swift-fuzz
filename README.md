@@ -300,3 +300,23 @@ version you can pin.
 **Toolchains:** use a `container:` with a swift.org image such as `swift:6.3`.
 GitHub's macOS runners ship Xcode's toolchain, which has no libFuzzer, so a
 macOS fuzz job needs a swift.org toolchain installed and selected first.
+
+## Working on swift-fuzz
+
+```bash
+swift test                                   # unit tests
+cd Examples/BuggyLibrary/Fuzzing             # or Examples/StandaloneFuzzing on 6.4+
+swift package --allow-writing-to-package-directory fuzz BuggyParse --time 60
+```
+
+CI runs the unit tests on Linux and macOS, fuzzes both examples for real on
+Swift 6.3 and 6.4, and asserts that the standalone shape refuses cleanly on
+6.3.x. The example jobs check three things a passing exit code would hide: that
+the planted bug was actually found, that the crash propagated a non-zero status,
+and that an artefact was written — without which `--reproduce` is impossible.
+
+`Tests/FuzzCommandPluginTests/Arguments.swift` is a **symlink** to the command
+plugin's copy. SwiftPM forbids a plugin target from depending on a library
+target, so there is no module to import; compiling the real file a second time
+is the only way to test it without a copy that drifts. Do not replace it with a
+copy.

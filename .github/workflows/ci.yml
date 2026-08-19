@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly. The 6.4 job tracks a nightly snapshot, so toolchain drift breaks
+    # this repo without anyone touching it.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os == 'Linux' && 'ubuntu-latest' || 'macos-26' }}
+    container: ${{ matrix.os == 'Linux' && 'swift:6.3' || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [Linux, macOS]
+    steps:
+      - uses: actions/checkout@v7
+      # Nothing here fuzzes, so this runs on Xcode's toolchain too — which is
+      # the point: the library and the templates must compile for people who
+      # cannot fuzz locally.
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  # Each example is fuzzed for real and asserted on. These are the claims the
+  # README makes, so they are the ones worth pinning.
+  examples:
+    name: ${{ matrix.shape }} example (Swift ${{ matrix.swift }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shape: Paired
+            swift: "6.3"
+            image: swift:6.3
+            path: Examples/BuggyLibrary/Fuzzing
+          - shape: Paired
+            swift: "6.4"
+            image: swiftlang/swift:nightly-6.4.x-noble
+            path: Examples/BuggyLibrary/Fuzzing
+          # The standalone shape needs 6.4; the 6.3 case is covered by the
+          # `guard` job below, which asserts it refuses cleanly.
+          - shape: Standalone
+            swift: "6.4"
+            image: swiftlang/swift:nightly-6.4.x-noble
+            path: Examples/StandaloneFuzzing
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Record seed count
+        id: seeds
+        working-directory: ${{ matrix.path }}
+        run: echo "count=$(find Seeds/BuggyParse -type f | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Fuzz the planted bug
+        working-directory: ${{ matrix.path }}
+        run: |
+          set +e
+          swift package --allow-writing-to-package-directory \
+            fuzz BuggyParse --time 90 > fuzz.log 2>&1
+          status=$?
+          set -e
+
+          # A crash is the expected outcome here, so all three properties are
+          # asserted explicitly rather than inferred from the exit status.
+          if ! grep -q "Fatal error: planted bug" fuzz.log; then
+            echo "::error::the planted bug was not found in 90s"
+            tail -40 fuzz.log
+            exit 1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "::error::a crash did not propagate a non-zero exit status"
+            exit 1
+          fi
+          if [ -z "$(ls -A Crashes/BuggyParse 2>/dev/null)" ]; then
+            echo "::error::crashed but wrote no artefact; --reproduce would be impossible"
+            exit 1
+          fi
+          echo "found the planted bug, exit $status, artefact written"
+
+      # Seeds are passed to libFuzzer after the corpus, which is what makes them
+      # read-only. If that ordering regresses, discoveries start landing in
+      # Seeds/ and minimization can delete curated inputs.
+      - name: Seeds must be untouched
+        working-directory: ${{ matrix.path }}
+        run: |
+          after=$(find Seeds/BuggyParse -type f | wc -l)
+          before=${{ steps.seeds.outputs.count }}
+          if [ "$after" -ne "$before" ]; then
+            echo "::error::Seeds/ changed during a run: $before -> $after"
+            exit 1
+          fi
+          if [ -z "$(ls -A Corpus/BuggyParse 2>/dev/null)" ]; then
+            echo "::error::no discoveries were written to Corpus/"
+            exit 1
+          fi
+
+      - name: Replay must be clean once the crash is removed
+        working-directory: ${{ matrix.path }}
+        run: |
+          rm -rf Crashes/BuggyParse
+          swift package --allow-writing-to-package-directory fuzz BuggyParse --replay
+
+      - name: Upload fuzzing log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-log-${{ matrix.shape }}-${{ matrix.swift }}
+          path: ${{ matrix.path }}/fuzz.log
+          if-no-files-found: ignore
+
+  # The standalone shape cannot work on 6.3.x. It must say so, rather than
+  # failing with an undefined-symbol link error nobody can act on.
+  guard:
+    name: Standalone refuses on Swift 6.3
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Expect a clear refusal
+        working-directory: Examples/StandaloneFuzzing
+        run: |
+          set +e
+          swift package --allow-writing-to-package-directory \
+            fuzz BuggyParse --time 5 > guard.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::expected the build to fail on this toolchain"
+            exit 1
+          fi
+          if ! grep -q "requires Swift 6.4 or later" guard.log; then
+            echo "::error::failed, but not with the explanatory message"
+            tail -40 guard.log
+            exit 1
+          fi
+          echo "refused with the expected guidance"
