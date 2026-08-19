@@ -94,6 +94,10 @@ The plugin, attached to the library, generates the two symbols `shim.c` calls.
 `shim.c` is six lines, identical for every target, and never edited — copy it
 from `Examples/`.
 
+`Examples/` has both shapes side by side, running the same harness against the
+same library: `BuggyLibrary/Fuzzing` is paired, `StandaloneFuzzing` is
+standalone. See `Examples/README.md`.
+
 ### Which to use
 
 | Toolchain | Default backend | Paired | Standalone |

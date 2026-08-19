@@ -1,4 +1,7 @@
 .build/
 .swiftpm/
-Examples/*/Fuzzing/Corpus/
-Examples/*/Fuzzing/Crashes/
+
+# Example corpora and crash artefacts are regenerated on every run and carry no
+# value between them. A real consumer commits both — see "Corpus hygiene".
+Examples/**/Corpus/
+Examples/**/Crashes/
