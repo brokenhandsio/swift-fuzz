@@ -40,6 +40,7 @@ YourRepo/
 ├── Package.swift                    ← library under test, untouched
 └── Fuzzing/
     ├── Package.swift                ← root package when fuzzing
+    ├── Seeds/<Target>/              ← optional; hand-written, never written to
     ├── Corpus/<Target>/             ← committed; see Corpus hygiene below
     ├── Crashes/<Target>/            ← crashing inputs land here
     ├── Dictionaries/<Target>.dict   ← optional, picked up automatically
@@ -156,33 +157,48 @@ mode.
 
 Override any of them by passing the flag yourself; yours wins.
 
-## Corpus hygiene
+## Seeds and corpus
 
-The corpus is where the fuzzer's accumulated knowledge lives, and it is worth
-committing: on swift-cbor the RFC 8949 seed vectors alone reach 340 coverage
-edges, while the corpus after a few minutes of fuzzing reaches 507. A fresh
-clone with the corpus starts there instead of rediscovering it, and `--replay`
-in CI is only meaningful against a corpus with real coverage.
+Two directories hold inputs, and the difference matters.
 
-But libFuzzer keeps every input that adds a feature, so the raw directory grows
-fast and most of it is redundant. Minimize before committing:
+`Seeds/<Target>/` is yours: specification vectors, real-world samples, anything
+you wrote or curated deliberately. swift-fuzz passes it to libFuzzer *after* the
+corpus, which makes it read-only — discoveries are never written there.
+
+`Corpus/<Target>/` is libFuzzer's: every input it has found that reached new
+coverage. It grows on every run, including in CI.
+
+The split exists because minimizing conflates the two otherwise. `-merge=1`
+rewrites the directory it minimizes, keeping the smallest set that preserves
+coverage — and a hand-written vector whose coverage is reachable some other way
+is exactly what it deletes. swift-cbor lost all 69 of its RFC 8949 vectors that
+way before this separation existed. Specification vectors are documentation as
+much as coverage; a minimizer cannot know that.
+
+### Minimizing
+
+The corpus is worth committing: on swift-cbor the RFC seeds alone reach 340
+coverage edges, seeds plus corpus reach 533. But most of the corpus is
+redundant, so minimize before committing:
 
 ```bash
 .build/<triple>/debug/<Target> -merge=1 Corpus.min Corpus/<Target> && mv Corpus.min Corpus/<Target>
 ```
 
-On swift-cbor that took 5,109 files to 765 with **identical** edge coverage.
-Verify with `-runs=0` over both directories and compare the `cov:` figure.
+That took swift-cbor's corpus from 1,703 files to 565 while combined coverage
+moved 533 → 532. Minimizing the corpus alone leaves a little redundancy against
+the seeds; merging both together would shave it, but at the cost of mixing the
+two directories back up, which is the thing worth avoiding.
 
-Commit `Corpus/`, `Crashes/` and `Dictionaries/`; ignore `.build/`. Crash
-artefacts are regression tests — `--replay` re-runs them.
+Commit `Seeds/`, `Corpus/`, `Crashes/` and `Dictionaries/`; ignore `.build/`.
+Crash artefacts are regression tests — `--replay` re-runs them.
 
 ## Continuous integration
 
 Fuzzing splits into two CI jobs with different jobs to do.
 
-**Replay — on every push and pull request.** `--replay` runs the committed
-corpus and every saved crash artefact once each (`-runs=0`) and exits non-zero
+**Replay — on every push and pull request.** `--replay` runs the seeds, the
+committed corpus and every saved crash artefact once each (`-runs=0`) and exits non-zero
 if any of them still crashes. It is a regression test, not a search: it finishes
 in seconds and never mutates anything, so it belongs on the critical path.
 

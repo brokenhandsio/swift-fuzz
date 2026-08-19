@@ -98,8 +98,8 @@ struct FuzzCommandPlugin: CommandPlugin {
         case .fuzz:
             arguments += options.passthrough
             // Corpus first: libFuzzer writes newly discovered inputs to the
-            // first directory it is given.
-            arguments.append(layout.corpus.path)
+            // first directory it is given, and treats the rest as read-only.
+            arguments += layout.inputDirectories
         case .replay:
             arguments.append("-runs=0")
             arguments += options.passthrough
@@ -107,7 +107,7 @@ struct FuzzCommandPlugin: CommandPlugin {
             // -runs=0 means it writes nothing anyway), then any saved crashes.
             // Previously-fixed bugs are the regressions most worth catching, so
             // a replay that skipped Crashes/ would miss the point.
-            arguments.append(layout.corpus.path)
+            arguments += layout.inputDirectories
             if layout.hasCrashArtefacts {
                 arguments.append(layout.crashes.path)
             }
@@ -156,10 +156,22 @@ struct FuzzCommandPlugin: CommandPlugin {
     }
 }
 
-/// Where a target's corpus, crashes and dictionary live.
+/// Where a target's seeds, corpus, crashes and dictionary live.
 struct Layout {
     let packageDirectory: URL
     let target: String
+
+    /// Hand-written starting inputs. libFuzzer is given this directory *after*
+    /// the corpus, which makes it read-only: new discoveries go to the first
+    /// directory on the command line and never here.
+    ///
+    /// The separation is what keeps curated inputs safe from `-merge=1`, which
+    /// rewrites the directory it minimizes and would otherwise delete any seed
+    /// whose coverage is reachable some other way. Specification vectors are
+    /// documentation as much as coverage; losing them loses the provenance.
+    let seeds: URL
+
+    /// The working corpus: libFuzzer's accumulated discoveries. Written to.
     let corpus: URL
     let crashes: URL
     let dictionary: URL?
@@ -167,6 +179,7 @@ struct Layout {
     init(packageDirectory: URL, target: String) throws {
         self.packageDirectory = packageDirectory
         self.target = target
+        self.seeds = packageDirectory.appending(path: "Seeds/\(target)")
         self.corpus = packageDirectory.appending(path: "Corpus/\(target)")
         self.crashes = packageDirectory.appending(path: "Crashes/\(target)")
         let dictionary = packageDirectory.appending(path: "Dictionaries/\(target).dict")
@@ -174,9 +187,27 @@ struct Layout {
     }
 
     func create() throws {
+        // Seeds are deliberately not created: an empty directory would be noise
+        // in every package that does not curate any.
         for directory in [corpus, crashes] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+    }
+
+    /// Directories holding inputs to read, in the order libFuzzer should see
+    /// them: the writable corpus first, then any read-only seeds.
+    var inputDirectories: [String] {
+        var directories = [corpus.path]
+        if hasSeeds { directories.append(seeds.path) }
+        return directories
+    }
+
+    /// Whether any seed inputs are present. An empty or missing directory is
+    /// not passed, because libFuzzer treats a directory it cannot read as an
+    /// error rather than as "no inputs".
+    var hasSeeds: Bool {
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: seeds.path)) ?? []
+        return !contents.isEmpty
     }
 
     /// Whether any crashing inputs have been saved for this target.

@@ -20,6 +20,12 @@ swift package --allow-writing-to-package-directory fuzz BuggyParse --time 30
 Expect a non-zero exit, a crashing input written to `Crashes/BuggyParse/`, and a
 printed `--reproduce` command.
 
+Both carry a `Seeds/BuggyParse/` directory holding two hand-written inputs.
+libFuzzer is given it after the corpus, so it is read-only: discoveries land in
+`Corpus/`, and `-merge=1` on the corpus can never delete a seed. `Corpus/` and
+`Crashes/` are gitignored here because example runs regenerate them; `Seeds/` is
+committed, which is the point of the split.
+
 On Swift 6.3.x the standalone example deliberately fails to build, with an error
 explaining why and pointing at the paired shape. That is the behaviour under
 test — it is what stops the shape mismatch surfacing as an undefined-symbol link
