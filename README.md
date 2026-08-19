@@ -105,8 +105,8 @@ The plugin, attached to the library, generates the two symbols `shim.c` calls.
 )
 ```
 
-`shim.c` is six lines, identical for every target, and never edited — copy it
-from `Examples/`.
+`shim.c` is identical for every target and never edited. `swift package
+fuzz-init` writes it for you — see below.
 
 `Examples/` has both shapes side by side, running the same harness against the
 same library: `BuggyLibrary/Fuzzing` is paired, `StandaloneFuzzing` is
@@ -138,6 +138,26 @@ Two independent things block standalone on 6.3.x:
 
 So on 6.3.x the only working combination is `native` + paired, and it is the
 default. swift-fuzz never passes `--build-system`.
+
+## Adding a target
+
+```bash
+swift package --allow-writing-to-package-directory fuzz-init JSONParsing
+```
+
+Writes the harness stub, the C shim (paired shape) and a `Seeds/` directory,
+then prints the `Package.swift` stanza to paste in. Pass `--standalone` for the
+shim-free shape on Swift 6.4+.
+
+It does not edit `Package.swift` itself: doing that safely would mean parsing
+and rewriting arbitrary Swift, and getting it wrong would corrupt the manifest
+of a package that already works. Printing the stanza is the honest trade.
+
+Creating the `Fuzzing` package itself is a one-off — copy the manifest from
+`Examples/BuggyLibrary/Fuzzing/Package.swift`. A plugin cannot do it, because
+the whole point of the nested layout is that your main package never depends on
+swift-fuzz, so there is nowhere for a plugin to run until the nested package
+exists.
 
 ## Usage
 

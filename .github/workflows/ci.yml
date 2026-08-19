@@ -190,3 +190,63 @@ jobs:
             exit 1
           fi
           echo "rejected cleanly with installation guidance"
+
+  # fuzz-init has to produce something that actually builds. Scaffolding that
+  # emits a plausible-looking but non-compiling target is worse than none.
+  scaffold:
+    name: fuzz-init produces a working target
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Scaffold a target
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          swift package --allow-writing-to-package-directory fuzz-init Scaffolded | tee init.log
+          test -f FuzzTargets/Scaffolded/Scaffolded.swift
+          test -f FuzzTargets/ScaffoldedShim/shim.c
+          test -d Seeds/Scaffolded
+          grep -q "ScaffoldedTarget" init.log
+
+      # The stub is written to compile and run untouched, so a new target can be
+      # exercised before the harness is filled in.
+      # The stub is written to compile and run untouched, so a new target can
+      # be exercised before the harness is filled in.
+      - name: The untouched stub must build and run
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          # Drop the manifest's trailing "    ]" and ")" and re-close it around
+          # the new target. Simpler and less brittle than editing in place.
+          head -n -2 Package.swift > Package.swift.new
+          cat >> Package.swift.new <<'STANZA'
+                  .executableTarget(
+                      name: "Scaffolded",
+                      dependencies: ["ScaffoldedTarget"],
+                      path: "FuzzTargets/ScaffoldedShim"
+                  ),
+                  .target(
+                      name: "ScaffoldedTarget",
+                      dependencies: [.product(name: "Fuzzing", package: "swift-fuzz")],
+                      path: "FuzzTargets/Scaffolded",
+                      plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
+                  ),
+              ]
+          )
+          STANZA
+          mv Package.swift.new Package.swift
+          swift package --allow-writing-to-package-directory fuzz Scaffolded --time 20
+
+      - name: Refuses to overwrite an existing target
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          set +e
+          swift package --allow-writing-to-package-directory fuzz-init Scaffolded > again.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::fuzz-init overwrote an existing target"
+            exit 1
+          fi
+          grep -q "already exists" again.log

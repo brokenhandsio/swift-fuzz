@@ -1,0 +1,1 @@
+../../Plugins/FuzzInitPlugin/Scaffold.swift
