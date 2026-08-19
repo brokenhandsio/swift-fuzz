@@ -150,3 +150,43 @@ jobs:
             exit 1
           fi
           echo "refused with the expected guidance"
+
+  # The preflight probe must reject a toolchain that cannot fuzz, with guidance
+  # rather than a linker error. Linux is the interesting case: it accepts
+  # `-sanitize=fuzzer` at compile time and only fails at link, so a probe that
+  # merely compiled would pass here and the failure would surface much later.
+  preflight:
+    name: Preflight rejects a toolchain without libFuzzer
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Remove the fuzzer runtime from this container
+        run: find / -name 'libclang_rt.fuzzer*' -delete
+
+      - name: Expect guidance, not a raw linker error
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          set +e
+          swift package --allow-writing-to-package-directory \
+            fuzz BuggyParse --time 5 > preflight.log 2>&1
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::expected a failure on a toolchain with no libFuzzer"
+            exit 1
+          fi
+          if ! grep -q "does not include the libFuzzer runtime" preflight.log; then
+            echo "::error::failed without the installation guidance"
+            tail -30 preflight.log
+            exit 1
+          fi
+          if grep -qE "libclang_rt|undefined reference|unsupported option" preflight.log; then
+            echo "::error::a raw toolchain error leaked through to the user"
+            grep -nE "libclang_rt|undefined reference|unsupported option" preflight.log | head -5
+            exit 1
+          fi
+          echo "rejected cleanly with installation guidance"

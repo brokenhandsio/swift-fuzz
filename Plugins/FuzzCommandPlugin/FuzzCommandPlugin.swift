@@ -13,6 +13,9 @@ struct FuzzCommandPlugin: CommandPlugin {
     func performCommand(context: PluginContext, arguments: [String]) async throws {
         let options = try Arguments.parse(arguments)
         let target = try resolveTarget(options.target, in: context)
+        // Before the instrumented build, which is slow and whose failure mode
+        // for a toolchain without libFuzzer is unreadable.
+        try Preflight.check(context: context)
 
         let binary = try build(target: target, options: options, context: context)
         let layout = try Layout(packageDirectory: context.package.directoryURL, target: target)

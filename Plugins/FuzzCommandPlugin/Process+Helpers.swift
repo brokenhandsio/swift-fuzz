@@ -1,6 +1,20 @@
 import Foundation
 
 extension Process {
+    /// Runs a tool and returns its standard output, ignoring a non-zero exit.
+    static func capture(_ executable: URL, _ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// Runs a tool with its output attached to ours, and returns its exit status.
     ///
     /// Fuzzing output is the point of the exercise, so it is streamed rather
@@ -25,6 +39,20 @@ extension Process {
         if process.terminationReason == .uncaughtSignal {
             return 128 + process.terminationStatus
         }
+        return process.terminationStatus
+    }
+}
+
+extension Process {
+    /// Runs a tool with its output discarded and returns its exit status.
+    static func status(_ executable: URL, _ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
         return process.terminationStatus
     }
 }

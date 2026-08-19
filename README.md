@@ -30,8 +30,21 @@ compiler emits, so it cannot be vendored or installed separately.
   one from swift.org (`swiftly install 6.3.3`) and select it with
   `export TOOLCHAINS=org.swift.<identifier>` or `xcrun --toolchain swift`.
 
-`swift package fuzz` detects a toolchain without libFuzzer and says so, rather
-than surfacing a raw linker error.
+Before building anything, `swift package fuzz` compiles and links a five-line
+probe to check the toolchain can actually produce a fuzz binary. If it cannot,
+you get the guidance above instead of a raw driver or linker error, in a couple
+of seconds rather than after a full instrumented build.
+
+The probe links rather than just compiling, because the two platforms fail
+differently: macOS rejects `-sanitize=fuzzer` up front, while Linux accepts it
+and only fails when the archive cannot be found at link time. It also passes an
+explicit `-sdk` on macOS — without one it fails with `library 'c++' not found`,
+which would be a false negative on a perfectly good toolchain.
+
+The result is cached under `.build`, keyed on the compiler's path *and* version,
+so it is paid once per toolchain. Version matters as well as path: `swiftly`
+swaps what `swift-latest.xctoolchain` points at, and an in-place upgrade keeps
+its path.
 
 ## Layout
 
