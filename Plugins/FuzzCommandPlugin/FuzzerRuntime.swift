@@ -16,9 +16,9 @@ enum FuzzerRuntime {
         Build failed. See the compiler output above.
 
         If the errors are undefined `__sanitizer_cov_*` or `__asan_*` symbols, you are
-        on Swift 6.3.x with `--build-system swiftbuild`, which forwards sanitizer flags
-        to compilation but not to the link step. Drop the flag and use the default
-        build system; swift-fuzz supports it on every toolchain it supports.
+        on Swift 6.3.x or earlier with `--build-system swiftbuild`, which forwards
+        sanitizer flags to compilation but not to the link step. Drop the flag and use
+        the default build system; swift-fuzz supports it on every toolchain it supports.
         """
 
     static let missingToolchainMessage = """
@@ -34,7 +34,7 @@ enum FuzzerRuntime {
                      export TOOLCHAINS=org.swift.<identifier>
                      # or: xcrun --toolchain swift swift package fuzz ...
 
-          Linux  Use the full `swift:6.3` Docker image or a swift.org tarball. The
-                 `-slim` images have no compiler and will not work.
+          Linux  Use a full `swift:6.x` Docker image (6.0 or later) or a swift.org
+                 tarball. The `-slim` images have no compiler and will not work.
         """
 }

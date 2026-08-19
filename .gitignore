@@ -5,3 +5,6 @@
 # value between them. A real consumer commits both — see "Corpus hygiene".
 Examples/**/Corpus/
 Examples/**/Crashes/
+
+# libFuzzer's per-worker logs, written to the working directory by --jobs.
+Examples/**/fuzz-*.log

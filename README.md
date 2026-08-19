@@ -18,17 +18,95 @@ let fuzzTargets: @Sendable () -> Void = {
 swift package --allow-writing-to-package-directory fuzz CBORDecode --time 60
 ```
 
+## Getting started
+
+Fuzzing lives in a nested package so your library's own `Package.swift` is never
+touched. Create `Fuzzing/` beside it:
+
+```
+YourRepo/
+├── Package.swift        ← your library, unchanged
+└── Fuzzing/
+    └── Package.swift    ← the file below
+```
+
+Start with the dependencies and **no targets** — `fuzz-init` writes the target
+sources, and SwiftPM refuses to load a manifest that names directories which do
+not exist yet:
+
+```swift
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "Fuzzing",
+    dependencies: [
+        // Your library, and swift-fuzz. Note the `package:` label for a path
+        // dependency is the *directory* name, not the name in its manifest.
+        .package(path: "../"),
+        .package(url: "https://github.com/brokenhandsio/swift-fuzz.git", from: "0.1.0"),
+    ],
+    targets: []
+)
+```
+
+Then, from inside `Fuzzing/`:
+
+```bash
+swift package --allow-writing-to-package-directory fuzz-init JSONParsing
+```
+
+That writes the harness stub, the C shim and a `Seeds/` directory, and prints a
+manifest stanza. Paste it into `targets:` and add your library to the Swift
+target's dependencies:
+
+```swift
+    targets: [
+        // A pure-C executable holding libFuzzer's entry points, and a Swift
+        // library holding the harness. See "Two shapes" for why the executable
+        // cannot be Swift.
+        .executableTarget(
+            name: "JSONParsing",
+            dependencies: ["JSONParsingTarget"],
+            path: "FuzzTargets/JSONParsingShim"
+        ),
+        .target(
+            name: "JSONParsingTarget",
+            dependencies: [
+                .product(name: "Fuzzing", package: "swift-fuzz"),
+                .product(name: "YourLibrary", package: "YourRepo"),
+            ],
+            path: "FuzzTargets/JSONParsing",
+            plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
+        ),
+    ]
+```
+
+Fill in the two TODOs in `FuzzTargets/JSONParsing/JSONParsing.swift`, then:
+
+```bash
+swift package --allow-writing-to-package-directory fuzz JSONParsing --time 60
+```
+
+`fuzz-init` cannot create the `Fuzzing` package itself — a plugin has to run
+inside a package that already depends on swift-fuzz, and the whole point of the
+nested layout is that your main package does not. That first manifest is the one
+thing you paste by hand.
+
 ## Requirements
 
 A Swift toolchain that contains the libFuzzer runtime. It ships as a compiler-rt
 archive inside the toolchain and is ABI-coupled to the instrumentation your
 compiler emits, so it cannot be vendored or installed separately.
 
-- **Linux** — the official `swift:6.3` Docker image or a swift.org tarball. Use
-  the full image, not `-slim`, which has no compiler.
+- **Linux** — any official `swift:6.x` Docker image or swift.org tarball, from
+  6.0 onwards. Use the full image, not `-slim`, which has no compiler.
 - **macOS** — the toolchain bundled with Xcode **does not** include it. Install
   one from swift.org (`swiftly install 6.3.3`) and select it with
   `export TOOLCHAINS=org.swift.<identifier>` or `xcrun --toolchain swift`.
+
+Verified end to end on Swift 6.0.3, 6.1.3, 6.2.4, 6.3.3 and 6.4. Only the
+standalone target shape needs 6.4; everything else works from 6.0.
 
 Before building anything, `swift package fuzz` compiles and links a five-line
 probe to check the toolchain can actually produce a fuzz binary. If it cannot,
@@ -116,15 +194,15 @@ standalone. See `Examples/README.md`.
 
 | Toolchain | Default backend | Paired | Standalone |
 |---|---|---|---|
-| 6.3.x | `native` | ✅ | ❌ |
+| 6.0 – 6.3.x | `native` | ✅ | ❌ |
 | 6.4+ | `swiftbuild` | ✅ | ✅ |
 
-Use **paired** if you support Swift 6.3.x. Use **standalone** once your floor is
-6.4 — then `shim.c` and the second target both disappear. Attaching the plugin
+Use **paired** if you support anything before 6.4. Use **standalone** once your
+floor is 6.4 — then `shim.c` and the second target both disappear. Attaching the plugin
 to an executable target on 6.3.x is a build error explaining the constraint, not
 a link failure.
 
-Two independent things block standalone on 6.3.x:
+Two independent things block standalone before 6.4:
 
 - `native` cannot link a Swift fuzz executable at all. It renames the executable
   target's `main` to `<Module>_main` and aliases `main` to it, which collides
@@ -132,11 +210,11 @@ Two independent things block standalone on 6.3.x:
   an undefined `<Module>_main`, without it a duplicate `main`. A C target has no
   Swift `main` to rename, so the collision never arises — this is the same
   approach grpc-swift uses.
-- `swiftbuild` on 6.3.x forwards sanitizer flags to compilation but **not** to
-  the link step, giving undefined `__sanitizer_cov_*` and `__asan_*` symbols.
+- `swiftbuild` on 6.3.x and earlier forwards sanitizer flags to compilation but
+  **not** to the link step, giving undefined `__sanitizer_cov_*` and `__asan_*` symbols.
   `otherLinkerFlags` are dropped there too, so a plugin cannot repair it.
 
-So on 6.3.x the only working combination is `native` + paired, and it is the
+So before 6.4 the only working combination is `native` + paired, and it is the
 default. swift-fuzz never passes `--build-system`.
 
 ## Adding a target
