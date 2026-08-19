@@ -176,3 +176,78 @@ Verify with `-runs=0` over both directories and compare the `cov:` figure.
 
 Commit `Corpus/`, `Crashes/` and `Dictionaries/`; ignore `.build/`. Crash
 artefacts are regression tests — `--replay` re-runs them.
+
+## Continuous integration
+
+Fuzzing splits into two CI jobs with different jobs to do.
+
+**Replay — on every push and pull request.** `--replay` runs the committed
+corpus and every saved crash artefact once each (`-runs=0`) and exits non-zero
+if any of them still crashes. It is a regression test, not a search: it finishes
+in seconds and never mutates anything, so it belongs on the critical path.
+
+```yaml
+- name: Replay corpus
+  working-directory: Fuzzing
+  run: swift package --allow-writing-to-package-directory fuzz MyTarget --replay
+```
+
+**Soak — on a schedule.** Actual fuzzing, time-boxed, looking for new bugs.
+Nightly is a good default; it is the job that finds things.
+
+```yaml
+- name: Fuzz
+  working-directory: Fuzzing
+  run: swift package --allow-writing-to-package-directory fuzz MyTarget --time 600
+
+- name: Upload crashing inputs
+  if: failure()
+  uses: actions/upload-artifact@v4
+  with:
+    name: crashes-MyTarget
+    path: Fuzzing/Crashes/MyTarget/
+```
+
+Upload on `failure()` matters: the artefact is the only way to reproduce what
+the runner found, and the container is gone once the job ends.
+
+### Things that will bite you
+
+**Crash artefacts are regression tests.** Anything in `Crashes/<Target>/` is
+replayed on every run. Commit an artefact once the bug behind it is fixed and it
+guards the fix forever. Commit one for a bug that is *not* yet fixed and CI is
+red until it is — correct, but decide deliberately rather than by accident.
+
+**Not every reproducer is deterministic.** A finding that depends on
+`Dictionary` or `Set` iteration order will not reproduce reliably, because Swift
+seeds their hashing per process. swift-cbor has one that fires about 40% of the
+time from a single input. Check a candidate artefact by running it twenty times
+before you rely on it as a gate; if it is intermittent, say so where you commit
+it.
+
+**The corpus grows on every run**, including in CI. A soak job's working corpus
+is worth keeping — upload it as an artefact and merge it locally — but do not
+commit it straight from CI without minimizing first. See Corpus hygiene above.
+
+**Give the soak a `timeout-minutes`** comfortably above `--time`, and set
+`fail-fast: false` on the matrix so one target crashing does not cancel the
+others mid-search.
+
+**A path dependency on swift-fuzz needs two checkouts.** `Fuzzing/Package.swift`
+reaches this package with `.package(path: "../../swift-fuzz")`, which resolves
+on your machine and not in a fresh CI checkout. Either check both repos out side
+by side:
+
+```yaml
+- uses: actions/checkout@v7
+  with: { path: your-repo }
+- uses: actions/checkout@v7
+  with: { repository: you/swift-fuzz, ref: main, path: swift-fuzz }
+```
+
+...or use a URL dependency, which is simpler once swift-fuzz is a released
+version you can pin.
+
+**Toolchains:** use a `container:` with a swift.org image such as `swift:6.3`.
+GitHub's macOS runners ship Xcode's toolchain, which has no libFuzzer, so a
+macOS fuzz job needs a swift.org toolchain installed and selected first.

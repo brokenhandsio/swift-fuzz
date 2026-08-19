@@ -103,7 +103,14 @@ struct FuzzCommandPlugin: CommandPlugin {
         case .replay:
             arguments.append("-runs=0")
             arguments += options.passthrough
+            // Corpus first (libFuzzer only writes to the first directory, and
+            // -runs=0 means it writes nothing anyway), then any saved crashes.
+            // Previously-fixed bugs are the regressions most worth catching, so
+            // a replay that skipped Crashes/ would miss the point.
             arguments.append(layout.corpus.path)
+            if layout.hasCrashArtefacts {
+                arguments.append(layout.crashes.path)
+            }
         case .reproduce(let path):
             arguments += options.passthrough
             arguments.append(path)
@@ -170,6 +177,11 @@ struct Layout {
         for directory in [corpus, crashes] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+    }
+
+    /// Whether any crashing inputs have been saved for this target.
+    var hasCrashArtefacts: Bool {
+        !crashArtefacts().isEmpty
     }
 
     /// Crash artefacts, oldest first.
