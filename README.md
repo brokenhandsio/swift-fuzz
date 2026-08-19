@@ -40,32 +40,86 @@ YourRepo/
 ├── Package.swift                    ← library under test, untouched
 └── Fuzzing/
     ├── Package.swift                ← root package when fuzzing
-    ├── Corpus/<Target>/             ← grows as the fuzzer finds new coverage
+    ├── Corpus/<Target>/             ← committed; see Corpus hygiene below
     ├── Crashes/<Target>/            ← crashing inputs land here
     ├── Dictionaries/<Target>.dict   ← optional, picked up automatically
-    └── FuzzTargets/
-        ├── <Target>/<Target>.swift  ← your closure
-        └── <Target>Shim/shim.c      ← six lines, never edited
+    └── FuzzTargets/<Target>/…
 ```
 
 Fuzzing lives in its own package so instrumented builds — unfit for any other
 purpose — get their own `.build`, and your `swift build` and `swift test` stay
 clean. It also matches the layout OSS-Fuzz expects.
 
-### Why each target is a pair
+## Two shapes
 
-The executable is pure C and the harness is a Swift library. This is not
-cosmetic. SwiftPM's `native` build system renames a *Swift* executable target's
-`main` to `<Module>_main` and aliases `main` to it, which collides with the
-`main` libFuzzer's runtime provides:
+`FuzzTargetPlugin` generates different entry points depending on the kind of
+target you attach it to. You choose the shape by how you write the manifest;
+nothing else changes.
 
-- with `-parse-as-library` → undefined `<Module>_main`
-- without it → duplicate `main`
+**Standalone** (Swift 6.4+) — one Swift executable target. The plugin generates
+`LLVMFuzzerInitialize` and `LLVMFuzzerTestOneInput` directly into it.
 
-A C executable target has no Swift `main` to rename, so the collision never
-arises and the same sources build under both `native` and `swiftbuild`. This is
-the same approach grpc-swift uses. `shim.c` is identical for every target; copy
-it from `Examples/`.
+```swift
+.executableTarget(
+    name: "JSONParsing",
+    dependencies: [
+        .product(name: "Fuzzing", package: "swift-fuzz"),
+        .product(name: "MyLibrary", package: "MyRepo"),
+    ],
+    path: "FuzzTargets/JSONParsing",
+    plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
+)
+```
+
+**Paired** (any supported toolchain) — a pure-C executable plus a Swift library.
+The plugin, attached to the library, generates the two symbols `shim.c` calls.
+
+```swift
+.executableTarget(
+    name: "JSONParsing",
+    dependencies: ["JSONParsingTarget"],
+    path: "FuzzTargets/JSONParsingShim"          // holds only shim.c
+),
+.target(
+    name: "JSONParsingTarget",
+    dependencies: [
+        .product(name: "Fuzzing", package: "swift-fuzz"),
+        .product(name: "MyLibrary", package: "MyRepo"),
+    ],
+    path: "FuzzTargets/JSONParsing",
+    plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
+)
+```
+
+`shim.c` is six lines, identical for every target, and never edited — copy it
+from `Examples/`.
+
+### Which to use
+
+| Toolchain | Default backend | Paired | Standalone |
+|---|---|---|---|
+| 6.3.x | `native` | ✅ | ❌ |
+| 6.4+ | `swiftbuild` | ✅ | ✅ |
+
+Use **paired** if you support Swift 6.3.x. Use **standalone** once your floor is
+6.4 — then `shim.c` and the second target both disappear. Attaching the plugin
+to an executable target on 6.3.x is a build error explaining the constraint, not
+a link failure.
+
+Two independent things block standalone on 6.3.x:
+
+- `native` cannot link a Swift fuzz executable at all. It renames the executable
+  target's `main` to `<Module>_main` and aliases `main` to it, which collides
+  with the `main` libFuzzer's runtime supplies: with `-parse-as-library` you get
+  an undefined `<Module>_main`, without it a duplicate `main`. A C target has no
+  Swift `main` to rename, so the collision never arises — this is the same
+  approach grpc-swift uses.
+- `swiftbuild` on 6.3.x forwards sanitizer flags to compilation but **not** to
+  the link step, giving undefined `__sanitizer_cov_*` and `__asan_*` symbols.
+  `otherLinkerFlags` are dropped there too, so a plugin cannot repair it.
+
+So on 6.3.x the only working combination is `native` + paired, and it is the
+default. swift-fuzz never passes `--build-system`.
 
 ## Usage
 
@@ -98,29 +152,23 @@ mode.
 
 Override any of them by passing the flag yourself; yours wins.
 
-## Build systems, and when the shim goes away
+## Corpus hygiene
 
-| Toolchain | Default backend | C shim | Shim-free (one Swift target) |
-|---|---|---|---|
-| 6.3.x | `native` | works | **cannot work** |
-| 6.4+ | `swiftbuild` | works | works |
+The corpus is where the fuzzer's accumulated knowledge lives, and it is worth
+committing: on swift-cbor the RFC 8949 seed vectors alone reach 340 coverage
+edges, while the corpus after a few minutes of fuzzing reaches 507. A fresh
+clone with the corpus starts there instead of rediscovering it, and `--replay`
+in CI is only meaningful against a corpus with real coverage.
 
-The shim is what makes swift-fuzz work on today's release toolchain with no
-flags. It is transitional, not permanent: once your floor is 6.4, the executable
-can be a single Swift target with `@_cdecl("LLVMFuzzerTestOneInput")` generated
-straight into it, and `shim.c` and the paired library target both disappear.
+But libFuzzer keeps every input that adds a feature, so the raw directory grows
+fast and most of it is redundant. Minimize before committing:
 
-Two separate things block that on 6.3.x, which is why the shim exists:
+```bash
+.build/<triple>/debug/<Target> -merge=1 Corpus.min Corpus/<Target> && mv Corpus.min Corpus/<Target>
+```
 
-- `native` cannot link a Swift fuzz executable at all — it renames `main` to
-  `<Module>_main`, which collides with libFuzzer's `main` (see above).
-- `swiftbuild` on 6.3.x forwards sanitizer flags to compilation but **not** to
-  the link step, so you get undefined `__sanitizer_cov_*` and `__asan_*`
-  symbols. `otherLinkerFlags` are dropped there too, so a plugin cannot repair
-  it — and the AddressSanitizer runtime could not be relinked from outside in
-  any case.
+On swift-cbor that took 5,109 files to 765 with **identical** edge coverage.
+Verify with `-runs=0` over both directories and compare the `cov:` figure.
 
-So on 6.3.x, `native` + the shim is the only working combination, and it is the
-default. swift-fuzz therefore does not pass `--build-system` at all; if you pass
-`--build-system swiftbuild` on 6.3.x yourself, the build fails and swift-fuzz
-explains why.
+Commit `Corpus/`, `Crashes/` and `Dictionaries/`; ignore `.build/`. Crash
+artefacts are regression tests — `--replay` re-runs them.

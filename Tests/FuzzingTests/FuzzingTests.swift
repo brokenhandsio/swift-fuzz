@@ -37,35 +37,55 @@ struct FuzzTargetTests {
     }
 }
 
-@Suite("Generated entry point")
+@Suite("Generated entry points")
 struct GeneratedSourceTests {
-    // The generated file is the contract between the C shim and Swift: the shim
-    // calls these two symbols by name. If they drift, the link fails with an
+    // The generated file is a linking contract, and a broken one fails with an
     // undefined symbol and no hint as to why. Plugin targets cannot be imported,
-    // so the template is read from source.
-    static let template: String = {
-        let plugin = URL(fileURLWithPath: #filePath)
+    // so the templates are read from source.
+    static let plugin: String = {
+        let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // FuzzingTests
             .deletingLastPathComponent()   // Tests
             .deletingLastPathComponent()   // package root
             .appending(path: "Plugins/FuzzTargetPlugin/FuzzTargetPlugin.swift")
-        return (try? String(contentsOf: plugin, encoding: .utf8)) ?? ""
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }()
 
-    @Test("Generated source declares the symbols the C shim calls")
-    func declaresShimSymbols() {
-        #expect(Self.template.contains(#"@_cdecl("swift_fuzz_initialize")"#))
-        #expect(Self.template.contains(#"@_cdecl("swift_fuzz_run")"#))
+    /// The C shim in Examples/, which the paired template has to match.
+    static let shim: String = {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Examples/BuggyLibrary/Fuzzing/FuzzTargets/BuggyParseShim/shim.c")
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }()
+
+    @Test("Paired template declares exactly the symbols shim.c calls")
+    func pairedMatchesShim() {
+        // Both halves of the contract, checked against each other rather than
+        // against a hardcoded list, so drift on either side fails the test.
+        for symbol in ["swift_fuzz_initialize", "swift_fuzz_run"] {
+            #expect(Self.plugin.contains(#"@_cdecl("\#(symbol)")"#), "template missing \(symbol)")
+            #expect(Self.shim.contains(symbol), "shim.c missing \(symbol)")
+        }
     }
 
-    @Test("Generated source touches fuzzTargets so the lazy global initialises")
-    func touchesFuzzTargets() {
-        #expect(Self.template.contains("fuzzTargets()"))
+    @Test("Standalone template declares libFuzzer's own entry points")
+    func standaloneDeclaresLibFuzzerSymbols() {
+        #expect(Self.plugin.contains(#"@_cdecl("LLVMFuzzerInitialize")"#))
+        #expect(Self.plugin.contains(#"@_cdecl("LLVMFuzzerTestOneInput")"#))
     }
 
-    @Test("Generated source calls FuzzRunner.initialize before any input runs")
-    func callsInitialize() {
-        #expect(Self.template.contains("FuzzRunner.initialize()"))
+    @Test("The C shim does not define main, so libFuzzer's runtime supplies it")
+    func shimHasNoMain() {
+        #expect(!Self.shim.contains("int main("))
+    }
+
+    @Test("Both templates touch fuzzTargets and initialise the runner")
+    func bothTemplatesWireUpTheRegistry() {
+        // Two of each: one occurrence per template.
+        #expect(Self.plugin.components(separatedBy: "fuzzTargets()").count - 1 == 2)
+        #expect(Self.plugin.components(separatedBy: "FuzzRunner.initialize()").count - 1 == 2)
+        #expect(Self.plugin.components(separatedBy: "FuzzRunner.run(data, size)").count - 1 == 2)
     }
 }
 

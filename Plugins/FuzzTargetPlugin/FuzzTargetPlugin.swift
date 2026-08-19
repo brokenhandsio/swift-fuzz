@@ -1,27 +1,60 @@
 import Foundation
 import PackagePlugin
 
-/// Generates the bridge between the C entry-point shim and the user's
-/// `fuzzTargets` closure.
+/// Generates the libFuzzer entry points for a fuzz target.
 ///
-/// The generated code exists for two reasons. It gives the C shim two stable
-/// symbols to call, and — more subtly — it *references* `fuzzTargets`. A
-/// top-level `let` in Swift is initialised lazily, so a `fuzzTargets` closure
-/// that nothing ever mentions would never run, and no target would register.
+/// Two package shapes are supported, and the plugin picks between them by
+/// looking at the kind of target it is attached to.
+///
+/// **Paired** — the plugin is attached to a Swift *library* target, and a
+/// sibling pure-C executable target holds libFuzzer's entry points. Required on
+/// Swift 6.3.x, where the executable cannot be Swift: the `native` build system
+/// renames a Swift executable's `main` to `<Module>_main` and aliases `main` to
+/// it, colliding with the `main` libFuzzer's runtime supplies.
+///
+/// **Standalone** — the plugin is attached to a Swift *executable* target and
+/// generates `LLVMFuzzerInitialize` / `LLVMFuzzerTestOneInput` straight into it.
+/// No C, no second target. Needs Swift 6.4 or later, where the default build
+/// system is `swiftbuild` and the `main` rename does not happen.
+///
+/// In both cases the generated code *references* `fuzzTargets`. A top-level
+/// `let` in Swift is initialised lazily, so a `fuzzTargets` closure that nothing
+/// mentions would never run and no target would register.
 @main
 struct FuzzTargetPlugin: BuildToolPlugin {
     func createBuildCommands(context: PluginContext, target: Target) async throws -> [Command] {
+        guard let module = target as? SourceModuleTarget else {
+            Diagnostics.error("""
+                FuzzTargetPlugin must be attached to a source module target, but \
+                "\(target.name)" is not one.
+                """)
+            return []
+        }
+
+        let shape = Shape(moduleKind: module.kind)
+
+        if case .standalone = shape, !Self.standaloneIsSupported {
+            Diagnostics.error("""
+                "\(target.name)" is an executable target, which requires Swift 6.4 or later.
+
+                On this toolchain the executable must be a pure-C shim with the harness in a \
+                separate Swift library target, because SwiftPM renames a Swift executable's \
+                `main` and that collides with libFuzzer's. See swift-fuzz's README, or copy \
+                Examples/BuggyLibrary/Fuzzing for the layout.
+                """)
+            return []
+        }
+
         let work = context.pluginWorkDirectoryURL
         let staged = work.appending(path: "FuzzEntryPoint.staged.swift")
         let output = work.appending(path: "FuzzEntryPoint.swift")
+        try shape.source.write(to: staged, atomically: true, encoding: .utf8)
 
-        try Self.source.write(to: staged, atomically: true, encoding: .utf8)
-
-        // The file is produced above, at manifest-evaluation time; the copy is
-        // what tells SwiftPM about it and gets it compiled into the target.
+        // The file is produced above, at plugin-execution time; the copy is what
+        // tells SwiftPM about it and gets it compiled into the target.
         return [
             .buildCommand(
-                displayName: "Generating fuzz entry point for \(target.name)",
+                displayName: "Generating \(shape.description) fuzz entry point for \(target.name)",
                 executable: URL(fileURLWithPath: "/bin/cp"),
                 arguments: [staged.path, output.path],
                 inputFiles: [staged],
@@ -30,12 +63,52 @@ struct FuzzTargetPlugin: BuildToolPlugin {
         ]
     }
 
-    static let source = """
+    /// Whether the active toolchain can build the standalone shape.
+    ///
+    /// The plugin is compiled by the same toolchain that runs the build, so a
+    /// compile-time language-version check reports the toolchain in use.
+    static var standaloneIsSupported: Bool {
+        #if swift(>=6.4)
+        return true
+        #else
+        return false
+        #endif
+    }
+}
+
+/// Which entry points to generate, decided by the kind of target the plugin is
+/// attached to.
+enum Shape {
+    /// Attached to a Swift library; a sibling C executable owns the libFuzzer
+    /// entry points and calls into this module.
+    case paired
+    /// Attached to a Swift executable; it owns the libFuzzer entry points itself.
+    case standalone
+
+    init(moduleKind: ModuleKind) {
+        self = moduleKind == .executable ? .standalone : .paired
+    }
+
+    var description: String {
+        switch self {
+        case .paired: "C-shim"
+        case .standalone: "standalone"
+        }
+    }
+
+    var source: String {
+        switch self {
+        case .paired: Self.pairedSource
+        case .standalone: Self.standaloneSource
+        }
+    }
+
+    /// Called by the C shim, which supplies `LLVMFuzzerInitialize` and
+    /// `LLVMFuzzerTestOneInput`. These two symbol names are the contract with
+    /// `shim.c`; changing either without changing the other produces an
+    /// undefined-symbol link failure with no explanation.
+    static let pairedSource = """
         // Generated by swift-fuzz. Do not edit.
-        //
-        // `swift_fuzz_initialize` and `swift_fuzz_run` are called by the C entry-point
-        // shim, which supplies libFuzzer's `LLVMFuzzerInitialize` and
-        // `LLVMFuzzerTestOneInput`.
         import Fuzzing
 
         @_cdecl("swift_fuzz_initialize")
@@ -48,6 +121,30 @@ struct FuzzTargetPlugin: BuildToolPlugin {
 
         @_cdecl("swift_fuzz_run")
         func swift_fuzz_run(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
+            FuzzRunner.run(data, size)
+        }
+
+        """
+
+    /// libFuzzer's own entry points, emitted directly into the executable.
+    static let standaloneSource = """
+        // Generated by swift-fuzz. Do not edit.
+        import Fuzzing
+
+        @_cdecl("LLVMFuzzerInitialize")
+        func LLVMFuzzerInitialize(
+            _ argc: UnsafeMutablePointer<CInt>?,
+            _ argv: UnsafeMutablePointer<UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?>?
+        ) -> CInt {
+            // Touching `fuzzTargets` is what forces the lazy global to initialise,
+            // which is what actually registers the targets.
+            fuzzTargets()
+            FuzzRunner.initialize()
+            return 0
+        }
+
+        @_cdecl("LLVMFuzzerTestOneInput")
+        func LLVMFuzzerTestOneInput(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
             FuzzRunner.run(data, size)
         }
 
