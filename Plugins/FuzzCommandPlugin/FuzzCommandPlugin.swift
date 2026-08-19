@@ -64,40 +64,19 @@ struct FuzzCommandPlugin: CommandPlugin {
             "-g",
         ]
 
-        var result = try packageManager.build(.product(target), parameters: parameters)
-
-        // Swift 6.3.x does not forward the sanitizer flag to the link step, so
-        // the instrumentation lands but the runtime is never linked. Detect
-        // that specific failure and link the archive ourselves. This is done as
-        // a retry rather than unconditionally: on 6.4 the driver already links
-        // it, and doing it twice is a hard link error on Linux.
-        if !result.succeeded, FuzzerRuntime.needsExplicitLink(buildLog: result.logText) {
-            guard let archive = FuzzerRuntime.locateArchive(clang: try clangURL(context: context)) else {
-                throw FuzzError(FuzzerRuntime.missingToolchainMessage)
-            }
-            print("swift-fuzz: linking \(archive.lastPathComponent) explicitly (toolchain did not).")
-            parameters.otherLinkerFlags = FuzzerRuntime.explicitLinkFlags(archive: archive)
-            result = try packageManager.build(.product(target), parameters: parameters)
-        }
+        let result = try packageManager.build(.product(target), parameters: parameters)
 
         guard result.succeeded else {
             if FuzzerRuntime.lacksFuzzerSupport(buildLog: result.logText) {
                 throw FuzzError(FuzzerRuntime.missingToolchainMessage)
             }
-            throw FuzzError("Build failed.")
+            throw FuzzError(FuzzerRuntime.buildFailureMessage)
         }
 
         guard let artifact = result.builtArtifacts.first(where: { $0.kind == .executable }) else {
             throw FuzzError("Build succeeded but produced no executable for \"\(target)\".")
         }
         return artifact.url
-    }
-
-    private func clangURL(context: PluginContext) throws -> URL {
-        if let clang = try? context.tool(named: "clang") { return clang.url }
-        // Fall back to a sibling of swiftc so we stay inside the selected toolchain.
-        let swiftc = try context.tool(named: "swiftc").url
-        return swiftc.deletingLastPathComponent().appending(path: "clang")
     }
 
     // MARK: - Run

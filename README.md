@@ -98,11 +98,29 @@ mode.
 
 Override any of them by passing the flag yourself; yours wins.
 
-## Toolchain notes
+## Build systems, and when the shim goes away
 
-Swift 6.3.x does not forward `-sanitize=fuzzer` to the link step under the
-`swiftbuild` backend, so instrumentation lands but the runtime is never linked.
-swift-fuzz detects that specific failure and links the archive itself. It does
-this as a retry rather than unconditionally, because on 6.4 the driver already
-links it, and doing it twice is a hard link error on Linux (`ld.gold: multiple
-definition of 'fuzzer::...'`) even though Apple's linker silently tolerates it.
+| Toolchain | Default backend | C shim | Shim-free (one Swift target) |
+|---|---|---|---|
+| 6.3.x | `native` | works | **cannot work** |
+| 6.4+ | `swiftbuild` | works | works |
+
+The shim is what makes swift-fuzz work on today's release toolchain with no
+flags. It is transitional, not permanent: once your floor is 6.4, the executable
+can be a single Swift target with `@_cdecl("LLVMFuzzerTestOneInput")` generated
+straight into it, and `shim.c` and the paired library target both disappear.
+
+Two separate things block that on 6.3.x, which is why the shim exists:
+
+- `native` cannot link a Swift fuzz executable at all — it renames `main` to
+  `<Module>_main`, which collides with libFuzzer's `main` (see above).
+- `swiftbuild` on 6.3.x forwards sanitizer flags to compilation but **not** to
+  the link step, so you get undefined `__sanitizer_cov_*` and `__asan_*`
+  symbols. `otherLinkerFlags` are dropped there too, so a plugin cannot repair
+  it — and the AddressSanitizer runtime could not be relinked from outside in
+  any case.
+
+So on 6.3.x, `native` + the shim is the only working combination, and it is the
+default. swift-fuzz therefore does not pass `--build-system` at all; if you pass
+`--build-system swiftbuild` on 6.3.x yourself, the build fails and swift-fuzz
+explains why.

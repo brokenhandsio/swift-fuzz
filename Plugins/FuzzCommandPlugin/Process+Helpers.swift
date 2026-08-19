@@ -1,20 +1,6 @@
 import Foundation
 
 extension Process {
-    /// Runs a tool and returns its standard output, ignoring a non-zero exit.
-    static func capture(_ executable: URL, _ arguments: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(decoding: data, as: UTF8.self)
-    }
-
     /// Runs a tool with its output attached to ours, and returns its exit status.
     ///
     /// Fuzzing output is the point of the exercise, so it is streamed rather
