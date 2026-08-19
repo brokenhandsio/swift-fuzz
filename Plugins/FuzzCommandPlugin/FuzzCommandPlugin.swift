@@ -21,6 +21,19 @@ struct FuzzCommandPlugin: CommandPlugin {
         let layout = try Layout(packageDirectory: context.package.directoryURL, target: target)
         try layout.create()
 
+        if case .minimizeCorpus = options.mode {
+            let result = try Minimize.run(
+                binary: binary, layout: layout, workDirectory: context.pluginWorkDirectoryURL)
+            print("""
+
+                swift-fuzz: minimized Corpus/\(target)
+                  \(result.filesBefore) files, \(result.bytesBefore) bytes
+                  \(result.filesAfter) files, \(result.bytesAfter) bytes
+                Seeds/\(target) was not modified.
+                """)
+            return
+        }
+
         let status = try run(binary: binary, options: options, layout: layout)
         try report(status: status, layout: layout, target: target, options: options)
     }
@@ -117,6 +130,9 @@ struct FuzzCommandPlugin: CommandPlugin {
         case .reproduce(let path):
             arguments += options.passthrough
             arguments.append(path)
+        case .minimizeCorpus:
+            // Handled by Minimize, which builds its own argument list.
+            preconditionFailure("minimizeCorpus does not use the standard run path")
         }
 
         var environment = ProcessInfo.processInfo.environment

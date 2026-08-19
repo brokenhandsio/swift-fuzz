@@ -109,6 +109,30 @@ jobs:
             exit 1
           fi
 
+      # Minimization must shrink the corpus without touching seeds. Getting
+      # this wrong deletes curated inputs, which is the failure the Seeds/
+      # split exists to prevent.
+      - name: Minimize the corpus
+        working-directory: ${{ matrix.path }}
+        run: |
+          before=$(find Corpus/BuggyParse -type f | wc -l)
+          swift package --allow-writing-to-package-directory fuzz BuggyParse --minimize-corpus
+          after=$(find Corpus/BuggyParse -type f | wc -l)
+          seeds=$(find Seeds/BuggyParse -type f | wc -l)
+          echo "corpus $before -> $after, seeds $seeds"
+          if [ "$after" -gt "$before" ]; then
+            echo "::error::minimizing grew the corpus"
+            exit 1
+          fi
+          if [ "$after" -eq 0 ]; then
+            echo "::error::minimizing emptied the corpus"
+            exit 1
+          fi
+          if [ "$seeds" -ne "${{ steps.seeds.outputs.count }}" ]; then
+            echo "::error::minimizing modified Seeds/"
+            exit 1
+          fi
+
       - name: Replay must be clean once the crash is removed
         working-directory: ${{ matrix.path }}
         run: |

@@ -9,6 +9,8 @@ struct Arguments {
         case replay
         /// Run a single saved input, usually a crash artefact.
         case reproduce(String)
+        /// Shrink the corpus to the smallest set with the same coverage.
+        case minimizeCorpus
     }
 
     var target: String?
@@ -39,6 +41,8 @@ struct Arguments {
                 result.passthrough.append("-max_total_time=\(try next("--time"))")
             case "--replay":
                 result.mode = .replay
+            case "--minimize-corpus":
+                result.mode = .minimizeCorpus
             case "--reproduce":
                 result.mode = .reproduce(try next("--reproduce"))
             case "--jobs":
@@ -71,6 +75,8 @@ struct Arguments {
           --time <seconds>     Stop after this many seconds (-max_total_time).
           --jobs <n>           Run n fuzzing processes in parallel.
           --replay             Run the existing corpus once and exit. For CI.
+          --minimize-corpus    Shrink the corpus to the smallest set with the same
+                               coverage. Seeds are never modified.
           --reproduce <path>   Run one saved input, usually a crash artefact.
           --release            Build in release configuration.
           --sanitizers <list>  Override the sanitizer set. Default: fuzzer,address

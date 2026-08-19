@@ -61,6 +61,14 @@ struct ArgumentsTests {
         }
     }
 
+    @Test("--minimize-corpus selects minimize mode")
+    func minimizeMode() throws {
+        guard case .minimizeCorpus = try Arguments.parse(["T", "--minimize-corpus"]).mode else {
+            Issue.record("expected .minimizeCorpus")
+            return
+        }
+    }
+
     // MARK: Translated options
 
     @Test("--time becomes libFuzzer's -max_total_time")

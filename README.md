@@ -210,18 +210,31 @@ much as coverage; a minimizer cannot know that.
 
 ### Minimizing
 
-The corpus is worth committing: on swift-cbor the RFC seeds alone reach 340
-coverage edges, seeds plus corpus reach 533. But most of the corpus is
-redundant, so minimize before committing:
+The corpus is worth committing: on swift-cbor the seeds alone reach 341 coverage
+edges and seeds plus corpus reach 533. But libFuzzer keeps every input that adds
+a feature, so most of the directory is redundant:
 
 ```bash
-.build/<triple>/debug/<Target> -merge=1 Corpus.min Corpus/<Target> && mv Corpus.min Corpus/<Target>
+swift package --allow-writing-to-package-directory fuzz MyTarget --minimize-corpus
 ```
 
-That took swift-cbor's corpus from 1,703 files to 565 while combined coverage
-moved 533 → 532. Minimizing the corpus alone leaves a little redundancy against
-the seeds; merging both together would shave it, but at the cost of mixing the
-two directories back up, which is the thing worth avoiding.
+```
+swift-fuzz: minimized Corpus/CBORDecode
+  1793 files, 120862 bytes
+  579 files, 31026 bytes
+Seeds/CBORDecode was not modified.
+```
+
+68% fewer files, 74% fewer bytes, and edge coverage unchanged at 533.
+
+The merge runs over the seeds *and* the corpus, then drops any result that is
+byte-identical to a seed. So the corpus ends up holding only what the seeds do
+not already cover — minimizing the corpus in isolation would keep entries whose
+coverage a seed already provides. Seeds are an input to the merge and are never
+written.
+
+If the merge produces nothing, the corpus is left alone: an empty result means
+the binary failed, not that every input was redundant.
 
 ### What to commit, what to ignore
 
