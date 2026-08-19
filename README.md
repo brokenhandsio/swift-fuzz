@@ -190,8 +190,41 @@ moved 533 → 532. Minimizing the corpus alone leaves a little redundancy agains
 the seeds; merging both together would shave it, but at the cost of mixing the
 two directories back up, which is the thing worth avoiding.
 
-Commit `Seeds/`, `Corpus/`, `Crashes/` and `Dictionaries/`; ignore `.build/`.
-Crash artefacts are regression tests — `--replay` re-runs them.
+### What to commit, what to ignore
+
+Commit `Seeds/`, `Corpus/`, `Crashes/` and `Dictionaries/`. Crash artefacts are
+regression tests — `--replay` re-runs them.
+
+It is tempting to gitignore `Corpus/` to stop runs dirtying the tree, but it
+carries real value: on swift-cbor the seeds alone reach 341 coverage edges and
+seeds plus corpus reach 533. Ignoring it would throw away 56% of the coverage
+your replay gate exercises, and every clone would start from cold. The churn is
+the price; minimize before committing.
+
+A `Fuzzing/.gitignore` worth copying:
+
+```gitignore
+.build/
+
+# libFuzzer's per-worker logs, written by --jobs.
+/fuzz-*.log
+
+# Artefacts libFuzzer drops in the working directory when the binary is run by
+# hand without -artifact_prefix.
+/crash-*
+/leak-*
+/timeout-*
+/oom-*
+```
+
+**The leading slashes are load-bearing.** An unanchored `crash-*` matches at any
+depth, so it would also hide new artefacts inside `Crashes/` — the single most
+important thing to notice in `git status`. Check any pattern you add with a real
+file, not a hypothetical path:
+
+```bash
+touch Crashes/SomeTarget/crash-test && git check-ignore -v Crashes/SomeTarget/crash-test
+```
 
 ## Continuous integration
 
