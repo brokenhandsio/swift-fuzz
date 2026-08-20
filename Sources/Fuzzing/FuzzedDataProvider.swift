@@ -52,9 +52,9 @@ public struct FuzzedDataProvider {
 
     /// Wraps a fuzzer-produced buffer.
     ///
-    /// You do not normally call this: use `FuzzTarget(_:providing:)`, which
-    /// builds one per input.
-    public init(_ bytes: UnsafeRawBufferPointer) {
+    /// Internal: the public way to get a provider is `FuzzTarget.structured`,
+    /// which builds one per input, or ``init(_:)`` for bytes you already own.
+    init(_ bytes: UnsafeRawBufferPointer) {
         unsafe self.storage = .borrowed(bytes)
         self.head = 0
         self.tail = bytes.count

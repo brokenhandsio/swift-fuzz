@@ -21,21 +21,25 @@
 /// signal a genuine finding — a trap, `fatalError`, or a failed precondition
 /// are all reported by libFuzzer as crashes, which is exactly the point.
 ///
-/// - Note: `bytes` is only valid for the duration of the call. Copy anything
-///   you need to keep.
-/// Storing a closure that takes an unsafe buffer is not itself unsafe — the
-/// pointer only exists during a call. `@safe` records that; the unsafety is
-/// confined to ``FuzzRunner/run(_:_:)``, where the buffer is constructed.
+/// The input arrives as a `Span<UInt8>`: bounds-checked, and non-escapable, so
+/// the compiler enforces that it does not outlive the call. Copy anything you
+/// need to keep. If you need a pointer for an API that cannot take a `Span`,
+/// ask the span for one with `withUnsafeBufferPointer(_:)`.
+///
+/// Marked `@safe` because holding a closure that takes libFuzzer's buffer is
+/// not itself unsafe — the pointer exists only during a call, inside
+/// ``FuzzRunner/run(_:_:)``.
 @safe
 public struct FuzzTarget: Sendable {
     /// The target's name, as passed to `swift package fuzz <name>`.
     public let name: String
 
-    /// The body invoked once per fuzzer-produced input.
+    /// The body invoked once per input.
     ///
-    /// The closure's parameter is an unsafe buffer because that is libFuzzer's
-    /// contract: it hands over a pointer it owns for the duration of one call.
-    public let body: @Sendable (UnsafeRawBufferPointer) -> Void
+    /// Deliberately not public. It takes libFuzzer's raw buffer because that is
+    /// what the generated entry point has to hand; no public API on this type
+    /// exposes an unsafe pointer.
+    let body: @Sendable (UnsafeRawBufferPointer) -> Void
 
     /// Creates and registers a fuzz target.
     ///
@@ -46,8 +50,21 @@ public struct FuzzTarget: Sendable {
     @discardableResult
     public init(
         _ name: String,
-        _ body: @escaping @Sendable (UnsafeRawBufferPointer) -> Void
+        _ body: @escaping @Sendable (Span<UInt8>) -> Void
     ) {
+        unsafe self.init(name: name, unsafeBytes: { buffer in
+            let typed = unsafe buffer.assumingMemoryBound(to: UInt8.self)
+            unsafe body(typed.span)
+        })
+    }
+
+    /// The designated initialiser. Everything else funnels through here.
+    ///
+    /// The first parameter is labelled so a trailing-closure call cannot match
+    /// it: `FuzzTarget("x") { }` would otherwise be ambiguous between this and
+    /// ``init(_:_:)``, because a trailing closure matches a final closure
+    /// parameter whatever its label.
+    init(name: String, unsafeBytes body: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
         self.name = name
         unsafe self.body = body
         FuzzRunner.register(self)
@@ -67,17 +84,14 @@ public struct FuzzTarget: Sendable {
     /// initialisers taking a closure are ambiguous whenever the parameter type
     /// cannot be inferred — `{ _ in }` is enough to break it, and the compiler
     /// points at the closure rather than at the choice between them.
-    ///
-    /// Prefer this form in a package with `.strictMemorySafety()` enabled: the
-    /// provider owns the unsafe buffer, so the harness needs no `unsafe`.
     @discardableResult
     public static func structured(
         _ name: String,
         _ body: @escaping @Sendable (inout FuzzedDataProvider) -> Void
     ) -> FuzzTarget {
-        unsafe FuzzTarget(name) { bytes in
+        unsafe FuzzTarget(name: name, unsafeBytes: { bytes in
             var provider = unsafe FuzzedDataProvider(bytes)
             body(&provider)
-        }
+        })
     }
 }

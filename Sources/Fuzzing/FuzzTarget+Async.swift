@@ -49,10 +49,10 @@ extension FuzzTarget {
         _ name: String,
         _ body: @escaping @Sendable ([UInt8]) async -> Void
     ) -> FuzzTarget {
-        unsafe FuzzTarget(name) { buffer in
+        unsafe FuzzTarget(name: name, unsafeBytes: { buffer in
             let bytes = unsafe [UInt8](buffer)
             runBlocking { await body(bytes) }
-        }
+        })
     }
 
     /// An asynchronous fuzz target that reads typed values.

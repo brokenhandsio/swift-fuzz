@@ -9,10 +9,17 @@ import Fuzzing
 
 let fuzzTargets: @Sendable () -> Void = {
     FuzzTarget("CBORDecode") { bytes in
-        _ = try? CBOR.decode(Array(bytes))
+        _ = try? CBOR.decode(bytes)
     }
 }
 ```
+
+The body receives a `Span<UInt8>`: bounds-checked, and non-escapable so the
+compiler enforces that it does not outlive the call. Nothing in swift-fuzz's API
+hands you a pointer, so a harness needs no `unsafe` even in a package with
+`.strictMemorySafety()` enabled. An API that already takes a `Span` — which is
+increasingly the idiom for parsers — can be handed the fuzzer's bytes with
+nothing copied.
 
 ```bash
 swift package --allow-writing-to-package-directory fuzz CBORDecode --time 60
@@ -398,26 +405,32 @@ mode.
 
 ## Strict memory safety
 
-A fuzz body receives an `UnsafeRawBufferPointer` — that is libFuzzer's contract,
-not a choice. In a package with `.strictMemorySafety()` enabled, that means the
-`FuzzTarget` call and any use of `bytes` need the `unsafe` keyword:
+Nothing here requires `unsafe`. The fuzz body receives a `Span<UInt8>` and the
+structured forms receive a `FuzzedDataProvider`; neither exposes a pointer, so a
+harness in a package with `.strictMemorySafety()` enabled compiles clean:
 
 ```swift
 let fuzzTargets: @Sendable () -> Void = {
-    unsafe FuzzTarget("JSONParsing") { bytes in
-        try? JSONParser.parse(unsafe Array(bytes))
+    FuzzTarget("JSONParsing") { bytes in
+        _ = try? JSONParser.parse(bytes)
     }
 }
 ```
 
-The code swift-fuzz generates is already annotated, so it compiles cleanly
-whether or not you enable the setting.
+`Examples/` is built this way, with the setting on, so the pattern is compiled
+and fuzzed on every CI run rather than merely described here.
 
-Shape your library to take a safe type — `[UInt8]`, `Span<UInt8>` — and convert
-at the harness boundary, as above. The unsafe pointer then never reaches the
-code under test, and one `unsafe` covers the whole harness. `Examples/` is built
-this way, with the setting on, so the pattern is compiled and fuzzed on every CI
-run rather than merely described here.
+If you need a pointer for an API that cannot take a `Span`, ask the span for one
+at the point of need:
+
+```swift
+bytes.withUnsafeBufferPointer { buffer in
+    legacyParse(buffer.baseAddress, buffer.count)
+}
+```
+
+Note `Span` is not a `Sequence`, so there is no `Array(span)` or `reversed()`.
+Copy by index when you genuinely need a collection.
 
 ## Defaults, and why
 

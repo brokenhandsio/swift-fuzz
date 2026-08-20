@@ -51,18 +51,19 @@ enum Scaffold {
         // dependencies in Package.swift.
 
         let fuzzTargets: @Sendable () -> Void = {
-            // If this package enables .strictMemorySafety(), the FuzzTarget call
-            // and any use of `bytes` need the `unsafe` keyword.
             FuzzTarget("\(target)") { bytes in
-                // `bytes` is one fuzzer-produced input: arbitrary, usually malformed,
-                // and valid only for the duration of this call. Copy anything you keep.
+                // `bytes` is a `Span<UInt8>` holding one fuzzer-produced input:
+                // arbitrary, usually malformed, and valid only for this call.
+                // It is bounds-checked and cannot escape, so nothing here needs
+                // `unsafe`. Copy anything you want to keep.
                 //
-                // Expected failures should be swallowed — `try?` a throwing parser.
-                // Anything that gets past that (a trap, a precondition failure, an
-                // overflow, unbounded recursion) is a finding, which is the point.
+                // Expected failures should be swallowed — `try?` a throwing
+                // parser. Anything that gets past that (a trap, a precondition
+                // failure, an overflow, unbounded recursion) is a finding, which
+                // is the point.
                 //
                 // TODO: call the code under test, for example:
-                // _ = try? MyParser.parse(Array(bytes))
+                // _ = try? MyParser.parse(bytes)
                 _ = bytes
             }
         }
