@@ -184,3 +184,33 @@ struct FuzzableTests {
         #expect((0...3).contains(request.retries))
     }
 }
+
+@Suite("Owned input")
+struct OwnedProviderTests {
+    // The asynchronous targets own their bytes, because the input has to
+    // outlive the synchronous call libFuzzer makes. Same behaviour either way.
+    @Test("An array-backed provider behaves like a buffer-backed one")
+    func matchesBorrowed() {
+        let input: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
+
+        var owned = FuzzedDataProvider(input)
+        let ownedResult = (owned.integer(in: UInt16(0)...UInt16(1000)), owned.bool(), owned.bytes(3))
+
+        let borrowedResult = unsafe input.withUnsafeBytes { raw -> (UInt16, Bool, [UInt8]) in
+            var borrowed = unsafe FuzzedDataProvider(raw)
+            return (borrowed.integer(in: UInt16(0)...UInt16(1000)), borrowed.bool(), borrowed.bytes(3))
+        }
+
+        #expect(ownedResult.0 == borrowedResult.0)
+        #expect(ownedResult.1 == borrowedResult.1)
+        #expect(ownedResult.2 == borrowedResult.2)
+    }
+
+    @Test("An empty array-backed provider is exhausted, not crashing")
+    func emptyOwned() {
+        var provider = FuzzedDataProvider([])
+        #expect(provider.isEmpty)
+        #expect(provider.integer(UInt32.self) == 0)
+        #expect(provider.bytes(4).isEmpty)
+    }
+}

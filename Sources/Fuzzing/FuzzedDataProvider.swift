@@ -33,7 +33,18 @@
 ///   reference, escape the fuzz body.
 @safe
 public struct FuzzedDataProvider {
-    @safe private let buffer: UnsafeRawBufferPointer
+    /// Where the input lives.
+    ///
+    /// The synchronous forms borrow libFuzzer's buffer and copy nothing, which
+    /// matters when the body is short and the loop runs a million times a
+    /// second. The asynchronous forms have to copy anyway — the bytes must
+    /// outlive the call to cross into a `Task` — so they own an array instead.
+    @safe private enum Storage {
+        case borrowed(UnsafeRawBufferPointer)
+        case owned([UInt8])
+    }
+
+    @safe private let storage: Storage
     /// Next byte to hand out from the front.
     private var head: Int
     /// One past the next byte to hand out from the back.
@@ -44,9 +55,26 @@ public struct FuzzedDataProvider {
     /// You do not normally call this: use `FuzzTarget(_:providing:)`, which
     /// builds one per input.
     public init(_ bytes: UnsafeRawBufferPointer) {
-        unsafe self.buffer = bytes
+        unsafe self.storage = .borrowed(bytes)
         self.head = 0
         self.tail = bytes.count
+    }
+
+    /// Wraps bytes the provider owns.
+    ///
+    /// Used by the asynchronous fuzz targets, where the input has to outlive
+    /// the synchronous call that libFuzzer makes.
+    public init(_ bytes: [UInt8]) {
+        self.storage = .owned(bytes)
+        self.head = 0
+        self.tail = bytes.count
+    }
+
+    private func byte(at index: Int) -> UInt8 {
+        switch storage {
+        case .borrowed(let buffer): unsafe buffer[index]
+        case .owned(let bytes): bytes[index]
+        }
     }
 
     /// How many bytes remain unconsumed.
@@ -61,7 +89,13 @@ public struct FuzzedDataProvider {
     public mutating func bytes(_ count: Int) -> [UInt8] {
         let available = min(max(0, count), remainingCount)
         guard available > 0 else { return [] }
-        let result = unsafe [UInt8](buffer[head..<(head + available)])
+        let result: [UInt8]
+        switch storage {
+        case .borrowed(let buffer):
+            result = unsafe [UInt8](buffer[head..<(head + available)])
+        case .owned(let bytes):
+            result = Array(bytes[head..<(head + available)])
+        }
         head += available
         return result
     }
@@ -139,7 +173,7 @@ public struct FuzzedDataProvider {
     private mutating func takeFromBack() -> UInt8 {
         guard tail > head else { return 0 }
         tail -= 1
-        return unsafe buffer[tail]
+        return byte(at: tail)
     }
 
     private mutating func magnitude<T: FixedWidthInteger>(_ type: T.Type) -> T.Magnitude {

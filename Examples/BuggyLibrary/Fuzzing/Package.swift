@@ -15,6 +15,7 @@ let extraSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "Fuzzing",
+    platforms: [.macOS(.v26)],
     dependencies: [
         // The library under test, and swift-fuzz itself. Note that the `package:`
         // label for a path dependency is the *directory* name, not the name in

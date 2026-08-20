@@ -15,6 +15,7 @@ let extraSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "BuggyLibrary",
+    platforms: [.macOS(.v26)],
     products: [.library(name: "BuggyLibrary", targets: ["BuggyLibrary"])],
     targets: [.target(name: "BuggyLibrary", swiftSettings: extraSettings)]
 )

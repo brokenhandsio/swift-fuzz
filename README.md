@@ -296,6 +296,51 @@ Conformances ship for the integers, `Bool`, `Double`, `Float`, `String`,
 input can ask for an enormous allocation, and the fuzzer spends its time on
 out-of-memory reports instead of on your code.
 
+## Asynchronous targets
+
+libFuzzer's entry point is a synchronous C function that must run one input and
+return, so there is nowhere to `await`. Use the asynchronous form and swift-fuzz
+bridges the gap:
+
+```swift
+FuzzTarget.async("Routing") { bytes in
+    _ = try? await app.testable().sendRequest(makeRequest(bytes))
+}
+
+FuzzTarget.structuredAsync("Routing") { data in
+    var data = data
+    let method = data.caseOf(HTTPMethod.self) ?? .GET
+    _ = try? await app.handle(method, body: data.remainingBytes())
+}
+```
+
+The body runs on a detached task while the fuzzing thread blocks until it
+finishes. The provider is passed by value rather than `inout`, because an
+`inout` argument cannot be held across a suspension point — rebind it as above.
+
+**The body must not require the main actor.** libFuzzer runs the entry point on
+the process's main thread, and this blocks it; `@MainActor` work is scheduled on
+that same thread, so it would wait for a thread that is waiting for it. That
+presents as a hang, not a crash. Server-side code (Vapor, NIO) is not
+main-actor-isolated and is unaffected.
+
+**It costs about 8×** on a trivial body — a task, a semaphore and a copy of the
+input per execution. Measured on the example target over 15 seconds:
+
+| | executions |
+|---|---|
+| synchronous | 5,954,712 |
+| asynchronous | 733,614 |
+
+That overhead is invisible against real asynchronous work and dominant against a
+body that only parses a few bytes, so keep synchronous targets synchronous.
+
+The bytes are copied, so unlike the synchronous forms the body may keep them.
+
+Asynchronous targets need a deployment target of macOS 10.15 or later;
+swift-fuzz itself declares no platform floor, so your fuzzing package should
+declare one if it uses them.
+
 ## Several targets in one executable
 
 libFuzzer allows exactly one `LLVMFuzzerTestOneInput` per binary, so swift-fuzz

@@ -26,6 +26,34 @@ public enum FuzzRunner {
     /// The target selected by ``initialize()``. Read once per input.
     @safe nonisolated(unsafe) private static var selected: (@Sendable (UnsafeRawBufferPointer) -> Void)?
 
+    /// How long an asynchronous fuzz body may take before it is treated as
+    /// stalled, in seconds.
+    ///
+    /// Override with `FUZZ_ASYNC_TIMEOUT`. Generous by default: a false
+    /// positive aborts a run that was merely slow, which is worse than waiting.
+    public static var asyncTimeout: Int {
+        environmentValue("FUZZ_ASYNC_TIMEOUT").flatMap(Int.init) ?? 60
+    }
+
+    /// Called when an asynchronous body has not finished in time.
+    ///
+    /// Aborts rather than returning, so libFuzzer records the input alongside
+    /// the explanation — a stalled input is worth keeping even when the cause
+    /// turns out to be the harness.
+    public static func reportStall() -> Never {
+        fail("""
+            An asynchronous fuzz body did not finish within \(asyncTimeout)s.
+
+            The usual cause is work that requires the main actor. libFuzzer runs on the
+            main thread and swift-fuzz blocks it while the body runs, so an
+            `await MainActor.run { ... }` inside the body waits for a thread that is
+            waiting for it.
+
+            If the body is simply slow, raise the limit:
+                FUZZ_ASYNC_TIMEOUT=300 swift package fuzz <target>
+            """)
+    }
+
     /// Registers a target. Called by ``FuzzTarget/init(_:_:)``.
     public static func register(_ target: FuzzTarget) {
         registered.append(target)
@@ -116,7 +144,7 @@ public enum FuzzRunner {
         return value.isEmpty ? nil : value
     }
 
-    private static func fail(_ message: String) -> Never {
+    static func fail(_ message: String) -> Never {
         // Written straight to stderr: this runs inside libFuzzer's process and
         // must be legible next to its own output.
         FileHandle.standardError.write("swift-fuzz: \(message)\n")

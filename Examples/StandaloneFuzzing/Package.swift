@@ -27,6 +27,7 @@ let extraSettings: [SwiftSetting] = [
 // against one library under test.
 let package = Package(
     name: "StandaloneFuzzing",
+    platforms: [.macOS(.v26)],
     dependencies: [
         .package(path: "../BuggyLibrary"),
         .package(path: "../.."),

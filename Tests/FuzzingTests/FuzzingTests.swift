@@ -47,6 +47,20 @@ struct FuzzTargetTests {
         #expect(seen.value == input)
     }
 
+    // Only registration is asserted here. Invoking an asynchronous body means
+    // blocking the calling thread while a task runs, and swift-testing runs
+    // tests on the cooperative pool — blocking a pool thread from a test is
+    // exactly the deadlock the API documents. The example package and CI
+    // exercise the bridge for real, under libFuzzer, where the calling thread
+    // belongs to libFuzzer rather than to the pool.
+    @Test("An async target registers like any other")
+    func asyncRegisters() {
+        FuzzTarget.async("async-probe") { _ in }
+        FuzzTarget.structuredAsync("structured-async-probe") { _ in }
+        #expect(FuzzRunner.registeredNames.contains("async-probe"))
+        #expect(FuzzRunner.registeredNames.contains("structured-async-probe"))
+    }
+
     @Test("A zero-length input is delivered as an empty buffer, not a crash")
     func emptyInput() {
         let count = Box(-1)

@@ -15,4 +15,12 @@ public enum BuggyLibrary {
             fatalError("planted bug: unhandled FUZZ header")
         }
     }
+
+    /// An asynchronous entry point, so the examples exercise the async bridge.
+    public static func parseAsync(_ bytes: [UInt8]) async throws {
+        // A real suspension, so the body genuinely leaves and re-enters the
+        // concurrency runtime rather than completing inline.
+        await Task.yield()
+        try parse(bytes)
+    }
 }

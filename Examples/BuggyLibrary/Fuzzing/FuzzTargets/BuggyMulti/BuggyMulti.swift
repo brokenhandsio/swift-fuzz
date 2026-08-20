@@ -19,4 +19,11 @@ let fuzzTargets: @Sendable () -> Void = {
         // are not interchangeable.
         try? BuggyLibrary.parse(Array((unsafe Array(bytes)).reversed()))
     }
+
+    // libFuzzer's entry point is synchronous, so an async body runs on a task
+    // while the fuzzing thread blocks. Mixed freely with synchronous targets in
+    // the same executable.
+    FuzzTarget.async("Asynchronous") { bytes in
+        try? await BuggyLibrary.parseAsync(bytes)
+    }
 }
