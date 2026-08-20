@@ -23,11 +23,18 @@
 ///
 /// - Note: `bytes` is only valid for the duration of the call. Copy anything
 ///   you need to keep.
+/// Storing a closure that takes an unsafe buffer is not itself unsafe — the
+/// pointer only exists during a call. `@safe` records that; the unsafety is
+/// confined to ``FuzzRunner/run(_:_:)``, where the buffer is constructed.
+@safe
 public struct FuzzTarget: Sendable {
     /// The target's name, as passed to `swift package fuzz <name>`.
     public let name: String
 
     /// The body invoked once per fuzzer-produced input.
+    ///
+    /// The closure's parameter is an unsafe buffer because that is libFuzzer's
+    /// contract: it hands over a pointer it owns for the duration of one call.
     public let body: @Sendable (UnsafeRawBufferPointer) -> Void
 
     /// Creates and registers a fuzz target.
@@ -42,7 +49,7 @@ public struct FuzzTarget: Sendable {
         _ body: @escaping @Sendable (UnsafeRawBufferPointer) -> Void
     ) {
         self.name = name
-        self.body = body
+        unsafe self.body = body
         FuzzRunner.register(self)
     }
 }

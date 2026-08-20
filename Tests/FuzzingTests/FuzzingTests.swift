@@ -10,29 +10,29 @@ struct FuzzTargetTests {
     @Test("Creating a target registers it under its name")
     func registersOnInit() {
         #expect(!FuzzRunner.registeredNames.contains("registration-probe"))
-        FuzzTarget("registration-probe") { _ in }
+        unsafe FuzzTarget("registration-probe") { _ in }
         #expect(FuzzRunner.registeredNames.contains("registration-probe"))
     }
 
     @Test("The body receives exactly the bytes it was given")
     func bodyReceivesBytes() {
         let seen = Box<[UInt8]>([])
-        let target = FuzzTarget("byte-probe") { bytes in
-            seen.value = Array(bytes)
+        let target = unsafe FuzzTarget("byte-probe") { bytes in
+            seen.value = unsafe Array(bytes)
         }
         let input: [UInt8] = [0xA1, 0x01, 0x02]
-        input.withUnsafeBytes { target.body($0) }
+        unsafe input.withUnsafeBytes { unsafe target.body($0) }
         #expect(seen.value == input)
     }
 
     @Test("A zero-length input is delivered as an empty buffer, not a crash")
     func emptyInput() {
         let count = Box(-1)
-        let target = FuzzTarget("empty-probe") { bytes in
+        let target = unsafe FuzzTarget("empty-probe") { bytes in
             count.value = bytes.count
         }
         let empty: [UInt8] = []
-        empty.withUnsafeBytes { target.body($0) }
+        unsafe empty.withUnsafeBytes { unsafe target.body($0) }
         #expect(count.value == 0)
     }
 }

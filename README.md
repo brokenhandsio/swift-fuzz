@@ -35,7 +35,7 @@ sources, and SwiftPM refuses to load a manifest that names directories which do
 not exist yet:
 
 ```swift
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 import PackageDescription
 
 let package = Package(
@@ -99,14 +99,17 @@ A Swift toolchain that contains the libFuzzer runtime. It ships as a compiler-rt
 archive inside the toolchain and is ABI-coupled to the instrumentation your
 compiler emits, so it cannot be vendored or installed separately.
 
-- **Linux** — any official `swift:6.x` Docker image or swift.org tarball, from
-  6.0 onwards. Use the full image, not `-slim`, which has no compiler.
+- **Linux** — the official `swift:6.3` Docker image or later, or a swift.org
+  tarball. Use the full image, not `-slim`, which has no compiler.
 - **macOS** — the toolchain bundled with Xcode **does not** include it. Install
   one from swift.org (`swiftly install 6.3.3`) and select it with
   `export TOOLCHAINS=org.swift.<identifier>` or `xcrun --toolchain swift`.
 
-Verified end to end on Swift 6.0.3, 6.1.3, 6.2.4, 6.3.3 and 6.4. Only the
-standalone target shape needs 6.4; everything else works from 6.0.
+swift-fuzz requires **Swift 6.3 or later** — its manifest is
+`swift-tools-version: 6.3`, needed for `.strictMemorySafety()`. Verified end to
+end on 6.3.3 and 6.4. (The runtime works as far back as 6.0, so if you need an
+older toolchain the only blocker is the manifest.) Only the standalone target
+shape needs 6.4.
 
 Before building anything, `swift package fuzz` compiles and links a five-line
 probe to check the toolchain can actually produce a fuzz binary. If it cannot,
@@ -194,15 +197,15 @@ standalone. See `Examples/README.md`.
 
 | Toolchain | Default backend | Paired | Standalone |
 |---|---|---|---|
-| 6.0 – 6.3.x | `native` | ✅ | ❌ |
+| 6.3.x | `native` | ✅ | ❌ |
 | 6.4+ | `swiftbuild` | ✅ | ✅ |
 
-Use **paired** if you support anything before 6.4. Use **standalone** once your
+Use **paired** if you support Swift 6.3.x. Use **standalone** once your
 floor is 6.4 — then `shim.c` and the second target both disappear. Attaching the plugin
 to an executable target on 6.3.x is a build error explaining the constraint, not
 a link failure.
 
-Two independent things block standalone before 6.4:
+Two independent things block standalone on 6.3.x:
 
 - `native` cannot link a Swift fuzz executable at all. It renames the executable
   target's `main` to `<Module>_main` and aliases `main` to it, which collides
@@ -214,7 +217,7 @@ Two independent things block standalone before 6.4:
   **not** to the link step, giving undefined `__sanitizer_cov_*` and `__asan_*` symbols.
   `otherLinkerFlags` are dropped there too, so a plugin cannot repair it.
 
-So before 6.4 the only working combination is `native` + paired, and it is the
+So on 6.3.x the only working combination is `native` + paired, and it is the
 default. swift-fuzz never passes `--build-system`.
 
 ## Adding a target
@@ -438,6 +441,13 @@ Swift 6.3 and 6.4, and asserts that the standalone shape refuses cleanly on
 6.3.x. The example jobs check three things a passing exit code would hide: that
 the planted bug was actually found, that the crash propagated a non-zero status,
 and that an artefact was written — without which `--reproduce` is impossible.
+
+Documentation is a DocC archive, behind an environment gate so consumers never
+resolve the plugin:
+
+```bash
+SWIFT_FUZZ_DOCC=1 swift package generate-documentation --target Fuzzing
+```
 
 `Tests/FuzzCommandPluginTests/Arguments.swift` is a **symlink** to the command
 plugin's copy. SwiftPM forbids a plugin target from depending on a library

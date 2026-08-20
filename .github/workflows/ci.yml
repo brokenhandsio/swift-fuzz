@@ -274,3 +274,23 @@ jobs:
             exit 1
           fi
           grep -q "already exists" again.log
+
+  docs:
+    name: DocC archive
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    env:
+      SWIFT_FUZZ_DOCC: "1" # wires up the (otherwise-gated) swift-docc-plugin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build documentation archive
+        run: swift package generate-documentation --target Fuzzing --warnings-as-errors
+      - name: Package archive
+        # DocC output contains files with ':' in their names, which
+        # upload-artifact rejects. Tar it into a single file first.
+        run: tar -C .build/plugins/Swift-DocC/outputs -czf Fuzzing.doccarchive.tgz Fuzzing.doccarchive
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fuzzing-doccarchive
+          path: Fuzzing.doccarchive.tgz

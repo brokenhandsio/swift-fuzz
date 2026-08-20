@@ -1,5 +1,16 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 import PackageDescription
+
+// The Lifetimes/SuppressedAssociatedTypes features swift-cbor enables are for its
+// `Span`-based parser; nothing here needs them. The rest are the same set.
+let extraSettings: [SwiftSetting] = [
+    .strictMemorySafety(),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("ExistentialAny"),
+    .enableUpcomingFeature("MemberImportVisibility"),
+    .enableUpcomingFeature("InternalImportsByDefault"),
+]
 
 let package = Package(
     name: "swift-fuzz",
@@ -10,7 +21,7 @@ let package = Package(
         .plugin(name: "FuzzInitPlugin", targets: ["FuzzInitPlugin"]),
     ],
     targets: [
-        .target(name: "Fuzzing"),
+        .target(name: "Fuzzing", swiftSettings: extraSettings),
         .plugin(
             name: "FuzzTargetPlugin",
             capability: .buildTool()
@@ -33,7 +44,7 @@ let package = Package(
                 ]
             )
         ),
-        .testTarget(name: "FuzzingTests", dependencies: ["Fuzzing"]),
+        .testTarget(name: "FuzzingTests", dependencies: ["Fuzzing"], swiftSettings: extraSettings),
         // Plugin targets cannot be imported, so the command plugin's argument
         // parser is symlinked into this target and compiled a second time.
         // Same file on disk, so the two copies cannot drift.
@@ -41,3 +52,13 @@ let package = Package(
         .testTarget(name: "FuzzInitPluginTests"),
     ]
 )
+
+// MARK: - Development-only dependencies
+
+// DocC documentation plugin. CI sets SWIFT_FUZZ_DOCC=1 when building the docs
+// archive. Gated so that consumers of this package never resolve it.
+if Context.environment["SWIFT_FUZZ_DOCC"] != nil {
+    package.dependencies.append(
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.0")
+    )
+}

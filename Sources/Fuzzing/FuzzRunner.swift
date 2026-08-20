@@ -21,10 +21,10 @@ import Glibc
 /// second for no benefit.
 public enum FuzzRunner {
     /// Every target registered by the `fuzzTargets` closure.
-    nonisolated(unsafe) private static var registered: [FuzzTarget] = []
+    @safe nonisolated(unsafe) private static var registered: [FuzzTarget] = []
 
     /// The target selected by ``initialize()``. Read once per input.
-    nonisolated(unsafe) private static var selected: (@Sendable (UnsafeRawBufferPointer) -> Void)?
+    @safe nonisolated(unsafe) private static var selected: (@Sendable (UnsafeRawBufferPointer) -> Void)?
 
     /// Registers a target. Called by ``FuzzTarget/init(_:_:)``.
     public static func register(_ target: FuzzTarget) {
@@ -64,7 +64,7 @@ public enum FuzzRunner {
 
         switch (requested, registered.count) {
         case (nil, 1):
-            selected = registered[0].body
+            unsafe selected = registered[0].body
         case (nil, _):
             fail("""
                 FUZZ_TARGET is not set and this executable registers \(registered.count) targets.
@@ -78,7 +78,7 @@ public enum FuzzRunner {
                     Available: \(registeredNames.joined(separator: ", "))
                     """)
             }
-            selected = match.body
+            unsafe selected = match.body
         }
     }
 
@@ -91,14 +91,19 @@ public enum FuzzRunner {
         guard let selected else {
             fail("FuzzRunner.run was called before FuzzRunner.initialize.")
         }
-        // A zero-length input still yields a valid (null-base, count 0) buffer.
-        selected(UnsafeRawBufferPointer(start: data, count: size))
+        // The one genuinely unsafe step: libFuzzer guarantees `data` is valid for
+        // `size` bytes for the duration of this call, and the buffer never escapes
+        // it. A zero-length input still yields a valid (null-base, count 0) buffer.
+        unsafe selected(UnsafeRawBufferPointer(start: data, count: size))
         return 0
     }
 
     private static func environmentValue(_ key: String) -> String? {
-        guard let raw = getenv(key) else { return nil }
-        let value = String(cString: raw)
+        // `getenv` hands back a pointer into the environment block, which is
+        // valid until the environment is mutated. It is copied into a String
+        // immediately and never retained.
+        guard let raw = unsafe getenv(key) else { return nil }
+        let value = unsafe String(cString: raw)
         return value.isEmpty ? nil : value
     }
 
@@ -116,10 +121,13 @@ private enum FileHandle {
         let fd: Int32
         func write(_ string: String) {
             let bytes = Array(string.utf8)
-            bytes.withUnsafeBufferPointer { buffer in
+            // Writing to fd 2 directly keeps this usable from inside libFuzzer's
+            // process without pulling in Foundation. The buffer is owned by
+            // `bytes` and does not outlive the closure.
+            unsafe bytes.withUnsafeBufferPointer { buffer in
                 var written = 0
                 while written < buffer.count {
-                    let n = _write(fd, buffer.baseAddress! + written, buffer.count - written)
+                    let n = unsafe _write(fd, buffer.baseAddress! + written, buffer.count - written)
                     if n <= 0 { break }
                     written += n
                 }
@@ -128,8 +136,9 @@ private enum FileHandle {
     }
 }
 
+// The platform `write(2)`, bound once so the writer above stays portable.
 #if canImport(Darwin)
-private let _write = Darwin.write
+private let _write = unsafe Darwin.write
 #else
-private let _write = Glibc.write
+private let _write = unsafe Glibc.write
 #endif
