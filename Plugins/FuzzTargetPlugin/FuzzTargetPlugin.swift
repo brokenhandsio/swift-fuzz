@@ -121,7 +121,9 @@ enum Shape {
 
         @_cdecl("swift_fuzz_run")
         func swift_fuzz_run(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
-            FuzzRunner.run(data, size)
+            // `unsafe` so this compiles without warnings in packages that enable
+            // .strictMemorySafety(). It is accepted either way.
+            unsafe FuzzRunner.run(data, size)
         }
 
         """
@@ -145,7 +147,9 @@ enum Shape {
 
         @_cdecl("LLVMFuzzerTestOneInput")
         func LLVMFuzzerTestOneInput(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
-            FuzzRunner.run(data, size)
+            // `unsafe` so this compiles without warnings in packages that enable
+            // .strictMemorySafety(). It is accepted either way.
+            unsafe FuzzRunner.run(data, size)
         }
 
         """

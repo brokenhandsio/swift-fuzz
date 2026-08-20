@@ -51,6 +51,8 @@ enum Scaffold {
         // dependencies in Package.swift.
 
         let fuzzTargets: @Sendable () -> Void = {
+            // If this package enables .strictMemorySafety(), the FuzzTarget call
+            // and any use of `bytes` need the `unsafe` keyword.
             FuzzTarget("\(target)") { bytes in
                 // `bytes` is one fuzzer-produced input: arbitrary, usually malformed,
                 // and valid only for the duration of this call. Copy anything you keep.

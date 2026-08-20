@@ -260,6 +260,29 @@ A crash exits non-zero and prints the artefact path plus a copy-pasteable
 `--reproduce` command. `--replay` over a committed corpus is the CI regression
 mode.
 
+## Strict memory safety
+
+A fuzz body receives an `UnsafeRawBufferPointer` — that is libFuzzer's contract,
+not a choice. In a package with `.strictMemorySafety()` enabled, that means the
+`FuzzTarget` call and any use of `bytes` need the `unsafe` keyword:
+
+```swift
+let fuzzTargets: @Sendable () -> Void = {
+    unsafe FuzzTarget("JSONParsing") { bytes in
+        try? JSONParser.parse(unsafe Array(bytes))
+    }
+}
+```
+
+The code swift-fuzz generates is already annotated, so it compiles cleanly
+whether or not you enable the setting.
+
+Shape your library to take a safe type — `[UInt8]`, `Span<UInt8>` — and convert
+at the harness boundary, as above. The unsafe pointer then never reaches the
+code under test, and one `unsafe` covers the whole harness. `Examples/` is built
+this way, with the setting on, so the pattern is compiled and fuzzed on every CI
+run rather than merely described here.
+
 ## Defaults, and why
 
 | Default | Reason |

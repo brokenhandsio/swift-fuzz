@@ -1,5 +1,17 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 import PackageDescription
+
+// The same settings swift-fuzz itself uses. Applied here so the examples show
+// that a fuzz harness works in a package with strict memory safety enabled —
+// the interesting case, since the harness receives an unsafe buffer.
+let extraSettings: [SwiftSetting] = [
+    .strictMemorySafety(),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("ExistentialAny"),
+    .enableUpcomingFeature("MemberImportVisibility"),
+    .enableUpcomingFeature("InternalImportsByDefault"),
+]
 
 let package = Package(
     name: "Fuzzing",
@@ -24,6 +36,7 @@ let package = Package(
                 .product(name: "BuggyLibrary", package: "BuggyLibrary"),
             ],
             path: "FuzzTargets/BuggyParse",
+            swiftSettings: extraSettings,
             plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
         ),
     ]
