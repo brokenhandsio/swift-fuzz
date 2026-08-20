@@ -405,6 +405,34 @@ file, not a hypothetical path:
 touch Crashes/SomeTarget/crash-test && git check-ignore -v Crashes/SomeTarget/crash-test
 ```
 
+## OSS-Fuzz
+
+```bash
+swift package --allow-writing-to-package-directory generate-oss-fuzz-script
+```
+
+Writes `OSSFuzz/` containing `build.sh`, `project.yaml`, a `Dockerfile` and a
+README explaining how to test locally and submit. The repository OSS-Fuzz should
+clone is taken from your git `origin` and converted to an https URL, since the
+builder clones anonymously and most remotes are SSH. Pass `--repository` to
+override that. The fuzz target list is read
+from the package rather than typed in, so regenerating after adding a target
+keeps the script correct — a stale `build.sh` only fails inside OSS-Fuzz's
+builder, where the feedback loop is slow.
+
+OSS-Fuzz builds with plain `swift build` and its own `$SWIFTFLAGS`; this plugin
+is not involved there. That works because the executable target is C, so the
+graph-wide `-parse-as-library` in `$SWIFTFLAGS` is harmless — the same property
+that makes the paired shape build under either build system.
+
+Two constraints worth knowing before you plan a submission:
+
+- OSS-Fuzz's `base-builder-swift` image currently ships **Swift 6.2.3**
+  (Ubuntu 24.04) or 6.1.3 (20.04), so a package requiring 6.3 will not build
+  there until the image is updated.
+- Only the `address` and `thread` sanitizers are supported for Swift. Declaring
+  `undefined` fails the build.
+
 ## Continuous integration
 
 Fuzzing splits into two CI jobs with different jobs to do.

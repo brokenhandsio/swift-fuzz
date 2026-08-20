@@ -19,6 +19,7 @@ let package = Package(
         .plugin(name: "FuzzTargetPlugin", targets: ["FuzzTargetPlugin"]),
         .plugin(name: "FuzzCommandPlugin", targets: ["FuzzCommandPlugin"]),
         .plugin(name: "FuzzInitPlugin", targets: ["FuzzInitPlugin"]),
+        .plugin(name: "OSSFuzzPlugin", targets: ["OSSFuzzPlugin"]),
     ],
     targets: [
         .target(name: "Fuzzing", swiftSettings: extraSettings),
@@ -44,12 +45,25 @@ let package = Package(
                 ]
             )
         ),
+        .plugin(
+            name: "OSSFuzzPlugin",
+            capability: .command(
+                intent: .custom(
+                    verb: "generate-oss-fuzz-script",
+                    description: "Write an OSS-Fuzz build script for this package."
+                ),
+                permissions: [
+                    .writeToPackageDirectory(reason: "generate-oss-fuzz-script writes the OSS-Fuzz integration files.")
+                ]
+            )
+        ),
         .testTarget(name: "FuzzingTests", dependencies: ["Fuzzing"], swiftSettings: extraSettings),
         // Plugin targets cannot be imported, so the command plugin's argument
         // parser is symlinked into this target and compiled a second time.
         // Same file on disk, so the two copies cannot drift.
         .testTarget(name: "FuzzCommandPluginTests"),
         .testTarget(name: "FuzzInitPluginTests"),
+        .testTarget(name: "OSSFuzzPluginTests"),
     ]
 )
 

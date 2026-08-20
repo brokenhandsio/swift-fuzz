@@ -1,6 +1,11 @@
 .build/
 .swiftpm/
 
+# A library should not pin its dependencies for consumers, and this package's
+# only dependency (swift-docc-plugin) exists solely when SWIFT_FUZZ_DOCC=1 — so
+# the file appears and disappears depending on whether docs were last built.
+/Package.resolved
+
 # Example corpora and crash artefacts are regenerated on every run and carry no
 # value between them. A real consumer commits both — see "Corpus hygiene".
 Examples/**/Corpus/
