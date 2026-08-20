@@ -1,6 +1,6 @@
-# swift-fuzz
+# Swift Fuzz
 
-Coverage-guided fuzzing for Swift packages. Add a nested `Fuzzing/` package,
+Swift Fuzz is a library to make it easy to integrate [libFuzzer](https://llvm.org/docs/LibFuzzer.html) into your Swift packages. It provides coverage-guided fuzzing for Swift packages. Add a nested `Fuzzing/` package,
 write a closure, run `swift package fuzz`. No compiler flags anywhere.
 
 ```swift
