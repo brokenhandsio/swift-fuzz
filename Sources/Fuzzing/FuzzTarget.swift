@@ -52,4 +52,32 @@ public struct FuzzTarget: Sendable {
         unsafe self.body = body
         FuzzRunner.register(self)
     }
+
+    /// Creates and registers a fuzz target that reads typed values instead of
+    /// raw bytes.
+    ///
+    /// ```swift
+    /// FuzzTarget.structured("Decode") { data in
+    ///     let depth = data.integer(in: 1...64)
+    ///     _ = try? MyParser.parse(data.remainingBytes(), maximumDepth: depth)
+    /// }
+    /// ```
+    ///
+    /// This is a factory rather than an overload of ``init(_:_:)`` because two
+    /// initialisers taking a closure are ambiguous whenever the parameter type
+    /// cannot be inferred — `{ _ in }` is enough to break it, and the compiler
+    /// points at the closure rather than at the choice between them.
+    ///
+    /// Prefer this form in a package with `.strictMemorySafety()` enabled: the
+    /// provider owns the unsafe buffer, so the harness needs no `unsafe`.
+    @discardableResult
+    public static func structured(
+        _ name: String,
+        _ body: @escaping @Sendable (inout FuzzedDataProvider) -> Void
+    ) -> FuzzTarget {
+        unsafe FuzzTarget(name) { bytes in
+            var provider = unsafe FuzzedDataProvider(bytes)
+            body(&provider)
+        }
+    }
 }

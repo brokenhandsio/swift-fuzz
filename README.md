@@ -240,6 +240,62 @@ the whole point of the nested layout is that your main package never depends on
 swift-fuzz, so there is nowhere for a plugin to run until the nested package
 exists.
 
+## Structured input
+
+A fuzz body receives raw bytes, but most harnesses want a few typed values and
+then a payload. `FuzzedDataProvider` does that decoding:
+
+```swift
+FuzzTarget.structured("Decode") { data in
+    let depth = data.integer(in: 1...64)
+    let strict = data.bool()
+    _ = try? MyParser.parse(data.remainingBytes(), maximumDepth: depth, strict: strict)
+}
+```
+
+Nothing here fails when the input is short: integers come back as zero, `bool()`
+as `false`, byte requests are truncated. A fuzzer spends most of its time on
+tiny inputs, so a provider that threw would turn the common case into an error
+path and the harness into a pile of `guard`s.
+
+**Bytes come from the front, control values from the back.** That is deliberate,
+and copied from LLVM's `FuzzedDataProvider.h`: it keeps the payload contiguous
+at a stable offset, so mutating it does not also shift every control value and
+invalidate what the fuzzer has learned about them.
+
+This is also the form to prefer under `.strictMemorySafety()` — the provider
+owns the unsafe buffer, so the harness needs no `unsafe` of its own.
+
+### Fuzzable
+
+Types can build themselves from the provider:
+
+```swift
+struct Request: Fuzzable {
+    var method: Method
+    var path: String
+
+    init(from provider: inout FuzzedDataProvider) {
+        method = provider.caseOf() ?? .get
+        path = provider.value()
+    }
+}
+
+FuzzTarget.structured("Router") { data in
+    _ = router.route(data.value(Request.self))
+}
+```
+
+`init(from:)` cannot fail, for the same reason the provider cannot: a failable
+initialiser would be taken by the majority of executions. Draw on the provider
+in a fixed order and do not branch on how much is left, so that the same bytes
+always produce the same value and a saved crashing input still reproduces.
+
+Conformances ship for the integers, `Bool`, `Double`, `Float`, `String`,
+`Optional` and `Array`. `Array` bounds its length at 256 — otherwise one byte of
+input can ask for an enormous allocation, and the fuzzer spends its time on
+out-of-memory reports instead of on your code.
+
 ## Several targets in one executable
 
 libFuzzer allows exactly one `LLVMFuzzerTestOneInput` per binary, so swift-fuzz

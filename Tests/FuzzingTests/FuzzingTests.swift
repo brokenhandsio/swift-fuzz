@@ -2,7 +2,12 @@ import Foundation
 import Testing
 @testable import Fuzzing
 
-@Suite("FuzzTarget registration")
+// Serialized because these mutate `FuzzRunner`'s process-global registry, which
+// is deliberately unsynchronised: libFuzzer registers once, on one thread,
+// before any input is dispatched, so a lock on that path would buy nothing in
+// production. Tests run in parallel by default and would otherwise race — which
+// showed up as an intermittent failure on Linux, passing on a re-run.
+@Suite("FuzzTarget registration", .serialized)
 struct FuzzTargetTests {
     // The registry is process-global by design (libFuzzer registers once at
     // startup), so this asserts on membership rather than on a count, which
@@ -21,6 +26,23 @@ struct FuzzTargetTests {
             seen.value = unsafe Array(bytes)
         }
         let input: [UInt8] = [0xA1, 0x01, 0x02]
+        unsafe input.withUnsafeBytes { unsafe target.body($0) }
+        #expect(seen.value == input)
+    }
+
+    @Test("A structured target registers like any other")
+    func structuredRegisters() {
+        FuzzTarget.structured("structured-probe") { _ in }
+        #expect(FuzzRunner.registeredNames.contains("structured-probe"))
+    }
+
+    @Test("A structured body sees the input through a provider")
+    func structuredReceivesInput() {
+        let seen = Box<[UInt8]>([])
+        let target = FuzzTarget.structured("structured-bytes") { data in
+            seen.value = data.remainingBytes()
+        }
+        let input: [UInt8] = [4, 5, 6]
         unsafe input.withUnsafeBytes { unsafe target.body($0) }
         #expect(seen.value == input)
     }
