@@ -13,6 +13,8 @@ struct Arguments {
         case minimizeCorpus
         /// Shrink one crashing input to the smallest input that still crashes.
         case minimizeCrash(String)
+        /// Print the fuzz targets this package registers, and exit.
+        case list
     }
 
     var target: String?
@@ -41,6 +43,8 @@ struct Arguments {
                 throw FuzzError(usage)
             case "--time":
                 result.passthrough.append("-max_total_time=\(try next("--time"))")
+            case "--list":
+                result.mode = .list
             case "--replay":
                 result.mode = .replay
             case "--minimize-corpus":
@@ -78,6 +82,7 @@ struct Arguments {
         OPTIONS:
           --time <seconds>     Stop after this many seconds (-max_total_time).
           --jobs <n>           Run n fuzzing processes in parallel.
+          --list               Print the fuzz targets this package registers.
           --replay             Run the existing corpus once and exit. For CI.
           --minimize-corpus    Shrink the corpus to the smallest set with the same
                                coverage. Seeds are never modified.

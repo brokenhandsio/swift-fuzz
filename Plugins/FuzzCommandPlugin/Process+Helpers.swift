@@ -1,6 +1,25 @@
 import Foundation
 
 extension Process {
+    /// Runs a tool with an environment and returns its standard output, or nil
+    /// if it exited non-zero.
+    static func captureOutput(
+        _ executable: URL, _ arguments: [String], environment: [String: String]
+    ) throws -> String? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// Runs a tool and returns its standard output, ignoring a non-zero exit.
     static func capture(_ executable: URL, _ arguments: [String]) throws -> String {
         let process = Process()

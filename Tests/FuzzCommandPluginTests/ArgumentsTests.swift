@@ -85,6 +85,14 @@ struct ArgumentsTests {
         }
     }
 
+    @Test("--list selects list mode")
+    func listMode() throws {
+        guard case .list = try Arguments.parse(["--list"]).mode else {
+            Issue.record("expected .list")
+            return
+        }
+    }
+
     // MARK: Translated options
 
     @Test("--time becomes libFuzzer's -max_total_time")

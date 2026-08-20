@@ -12,12 +12,22 @@ import PackagePlugin
 struct FuzzCommandPlugin: CommandPlugin {
     func performCommand(context: PluginContext, arguments: [String]) async throws {
         let options = try Arguments.parse(arguments)
-        let target = try resolveTarget(options.target, in: context)
         // Before the instrumented build, which is slow and whose failure mode
         // for a toolchain without libFuzzer is unreadable.
         try Preflight.check(context: context)
 
-        let binary = try build(target: target, options: options, context: context)
+        let discovery = Discovery(context: context) { product in
+            try build(target: product, options: options, context: context)
+        }
+
+        if case .list = options.mode {
+            print(discovery.listing(try discovery.all()))
+            return
+        }
+
+        let resolved = try discovery.resolve(requested: options.target)
+        let binary = resolved.binary
+        let target = resolved.target
         let layout = try Layout(packageDirectory: context.package.directoryURL, target: target)
         try layout.create()
 
@@ -48,34 +58,6 @@ struct FuzzCommandPlugin: CommandPlugin {
 
         let status = try run(binary: binary, options: options, layout: layout)
         try report(status: status, layout: layout, target: target, options: options)
-    }
-
-    // MARK: - Target selection
-
-    private func resolveTarget(_ requested: String?, in context: PluginContext) throws -> String {
-        let executables = context.package.products
-            .compactMap { $0 as? ExecutableProduct }
-            .map(\.name)
-
-        if let requested {
-            guard executables.contains(requested) else {
-                throw FuzzError("""
-                    No fuzz target named "\(requested)" in this package.
-                    Available: \(executables.isEmpty ? "(none)" : executables.joined(separator: ", "))
-                    """)
-            }
-            return requested
-        }
-
-        switch executables.count {
-        case 1: return executables[0]
-        case 0: throw FuzzError("This package declares no fuzz targets.")
-        default:
-            throw FuzzError("""
-                This package declares several fuzz targets; name the one you want.
-                Available: \(executables.joined(separator: ", "))
-                """)
-        }
     }
 
     // MARK: - Build
@@ -142,9 +124,9 @@ struct FuzzCommandPlugin: CommandPlugin {
         case .reproduce(let path):
             arguments += options.passthrough
             arguments.append(path)
-        case .minimizeCorpus, .minimizeCrash:
-            // Handled by Minimize, which builds its own argument list.
-            preconditionFailure("minimize modes do not use the standard run path")
+        case .minimizeCorpus, .minimizeCrash, .list:
+            // Handled before this point; neither uses the standard run path.
+            preconditionFailure("\(options.mode) does not use the standard run path")
         }
 
         var environment = ProcessInfo.processInfo.environment

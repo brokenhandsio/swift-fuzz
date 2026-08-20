@@ -39,5 +39,20 @@ let package = Package(
             swiftSettings: extraSettings,
             plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
         ),
+        .executableTarget(
+            name: "BuggyMulti",
+            dependencies: ["BuggyMultiTarget"],
+            path: "FuzzTargets/BuggyMultiShim"
+        ),
+        .target(
+            name: "BuggyMultiTarget",
+            dependencies: [
+                .product(name: "Fuzzing", package: "swift-fuzz"),
+                .product(name: "BuggyLibrary", package: "BuggyLibrary"),
+            ],
+            path: "FuzzTargets/BuggyMulti",
+            swiftSettings: extraSettings,
+            plugins: [.plugin(name: "FuzzTargetPlugin", package: "swift-fuzz")]
+        ),
     ]
 )

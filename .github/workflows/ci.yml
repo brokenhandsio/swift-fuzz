@@ -133,6 +133,29 @@ jobs:
             exit 1
           fi
 
+      # Two targets share one executable in the paired example. Selecting one by
+      # name only works if the plugin asks the built binary what it registers.
+      - name: Several targets in one executable
+        if: matrix.shape == 'Paired'
+        working-directory: ${{ matrix.path }}
+        run: |
+          swift package --allow-writing-to-package-directory fuzz --list | tee targets.log
+          for name in BuggyParse Forwards Backwards; do
+            grep -qE "^  $name$" targets.log || { echo "::error::--list omitted $name"; exit 1; }
+          done
+
+          set +e
+          swift package --allow-writing-to-package-directory fuzz Forwards --time 60 > multi.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ] || ! grep -q "Fatal error: planted bug" multi.log; then
+            echo "::error::selecting a target inside a differently-named executable failed"
+            tail -30 multi.log
+            exit 1
+          fi
+          test -d Corpus/Forwards && test -n "$(ls -A Crashes/Forwards)"
+          rm -rf Crashes/Forwards
+
       - name: Replay must be clean once the crash is removed
         working-directory: ${{ matrix.path }}
         run: |

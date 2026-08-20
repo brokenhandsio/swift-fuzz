@@ -240,6 +240,38 @@ the whole point of the nested layout is that your main package never depends on
 swift-fuzz, so there is nowhere for a plugin to run until the nested package
 exists.
 
+## Several targets in one executable
+
+libFuzzer allows exactly one `LLVMFuzzerTestOneInput` per binary, so swift-fuzz
+dispatches between targets at startup instead. Declare as many as you like in
+one `fuzzTargets` closure:
+
+```swift
+let fuzzTargets: @Sendable () -> Void = {
+    FuzzTarget("Decode") { bytes in ... }
+    FuzzTarget("RoundTrip") { bytes in ... }
+}
+```
+
+```bash
+swift package --allow-writing-to-package-directory fuzz --list
+swift package --allow-writing-to-package-directory fuzz Decode --time 60
+```
+
+Each target keeps its own `Seeds/`, `Corpus/` and `Crashes/` directories, keyed
+by name, so sharing an executable changes nothing about how findings are stored.
+What it buys is one build instead of several; what it costs is a binary
+instrumented for every target in it, so coverage counters include code the
+target you are running never touches.
+
+Names must be unique across the package. Running without a name lists what is
+available rather than guessing.
+
+The names live in a closure, so nothing outside the process can know them.
+`swift package fuzz` builds the executable and asks it — the registry stays the
+only place a target name is written down, and renaming one cannot leave a
+manifest out of step.
+
 ## Usage
 
 ```

@@ -49,6 +49,15 @@ public enum FuzzRunner {
     ///   an explanatory message if selection is ambiguous or impossible; there
     ///   is no useful way to continue.
     public static func initialize() {
+        // Asked by `swift package fuzz` to discover what this executable
+        // registers. The registry is the only source of truth for that — the
+        // names live in a closure, so nothing outside the process can know them
+        // without asking. Printed one per line, then exit before fuzzing starts.
+        if environmentValue("FUZZ_LIST_TARGETS") != nil {
+            FileHandle.standardOutput.write(registeredNames.joined(separator: "\n") + "\n")
+            exit(0)
+        }
+
         guard !registered.isEmpty else {
             fail("""
                 No fuzz targets were registered.
@@ -116,6 +125,7 @@ public enum FuzzRunner {
 }
 
 private enum FileHandle {
+    static let standardOutput = Writer(fd: 1)
     static let standardError = Writer(fd: 2)
     struct Writer {
         let fd: Int32
