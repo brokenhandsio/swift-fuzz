@@ -69,6 +69,22 @@ struct ArgumentsTests {
         }
     }
 
+    @Test("--minimize-crash carries the path it was given")
+    func minimizeCrashMode() throws {
+        guard case .minimizeCrash(let path) = try Arguments.parse(["T", "--minimize-crash", "Crashes/T/x"]).mode else {
+            Issue.record("expected .minimizeCrash")
+            return
+        }
+        #expect(path == "Crashes/T/x")
+    }
+
+    @Test("--minimize-crash without a path is an error")
+    func minimizeCrashNeedsPath() {
+        #expect(throws: FuzzError.self) {
+            try Arguments.parse(["T", "--minimize-crash"])
+        }
+    }
+
     // MARK: Translated options
 
     @Test("--time becomes libFuzzer's -max_total_time")

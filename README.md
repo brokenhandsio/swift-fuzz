@@ -249,6 +249,9 @@ swift package --allow-writing-to-package-directory fuzz <target> [options]
   --jobs <n>           Run n fuzzing processes in parallel.
   --replay             Run the existing corpus once and exit. For CI.
   --reproduce <path>   Run one saved input, usually a crash artefact.
+  --minimize-crash <path>
+                       Shrink a crashing input, in place, to the smallest input
+                       that still crashes.
   --release            Build in release configuration.
   --sanitizers <list>  Default: fuzzer,address. --no-asan for fuzzer only.
 ```
@@ -339,6 +342,32 @@ written.
 
 If the merge produces nothing, the corpus is left alone: an empty result means
 the binary failed, not that every input was redundant.
+
+### Minimizing a crash
+
+A crashing input straight out of the fuzzer is usually mostly padding. Shrink it
+before you try to read it:
+
+```bash
+swift package --allow-writing-to-package-directory \
+  fuzz MyTarget --minimize-crash Crashes/MyTarget/crash-abc123
+```
+
+```
+swift-fuzz: minimized Crashes/MyTarget/crash-abc123 in place
+  1004 bytes -> 4 bytes
+```
+
+This is what makes a finding readable. The bug swift-cbor's round-trip target
+found came out as a 92-byte input; minimized to 22 bytes it was obviously a map
+with two NaN keys, which was the whole diagnosis.
+
+It rewrites the file in place, because the smaller input supersedes the original
+as a regression test and keeping both would replay the same bug twice on every
+run. libFuzzer only keeps inputs that still crash, so the result is crashing by
+construction — though it does not check the crash is the *same* one. If a
+minimized artefact stops looking like the bug you were chasing, the original is
+in version control.
 
 ### What to commit, what to ignore
 

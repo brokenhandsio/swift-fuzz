@@ -74,6 +74,59 @@ enum Minimize {
                       filesAfter: after.files, bytesAfter: after.bytes)
     }
 
+    /// Shrinks one crashing input in place.
+    ///
+    /// libFuzzer's `-minimize_crash` repeatedly re-runs progressively smaller
+    /// mutations and keeps the smallest that still crashes, so the result is
+    /// crashing by construction. It does not verify the crash is the *same*
+    /// one, which is almost always true and occasionally not — if a minimized
+    /// artefact stops looking like the bug you were chasing, the original is in
+    /// version control.
+    static func crash(
+        binary: URL, layout: Layout, path: String, workDirectory: URL, passthrough: [String]
+    ) throws -> Result {
+        let input = URL(fileURLWithPath: path, relativeTo: layout.packageDirectory)
+        guard FileManager.default.fileExists(atPath: input.path) else {
+            throw FuzzError("No such input: \(path)")
+        }
+        let before = (try Data(contentsOf: input)).count
+
+        let staging = workDirectory.appending(path: "minimized-\(input.lastPathComponent)")
+        try? FileManager.default.removeItem(at: staging)
+
+        var arguments = ["-minimize_crash=1", "-exact_artifact_path=\(staging.path)"]
+        // Bounded so a stubborn input cannot run forever; overridable by passing
+        // your own -runs=.
+        if !passthrough.contains(where: { $0.hasPrefix("-runs=") }) {
+            arguments.append("-runs=100000")
+        }
+        arguments += passthrough
+        arguments.append(input.path)
+
+        let status = try Process.stream(
+            binary, arguments,
+            environment: environment(for: layout),
+            currentDirectory: layout.packageDirectory
+        )
+
+        guard FileManager.default.fileExists(atPath: staging.path) else {
+            // No output means libFuzzer never reproduced the crash at all.
+            throw FuzzError("""
+                \(path) did not crash, so there was nothing to minimize (exit \(status)).
+                Check it is a crashing input, and that this target is the one that produced it.
+                """)
+        }
+        let after = (try Data(contentsOf: staging)).count
+
+        // Replace in place: the smaller input supersedes the original as a
+        // regression test, and keeping both would mean replaying the same bug
+        // twice on every run.
+        try FileManager.default.removeItem(at: input)
+        try FileManager.default.moveItem(at: staging, to: input)
+
+        return Result(filesBefore: 1, bytesBefore: before, filesAfter: 1, bytesAfter: after)
+    }
+
     private static func seedContents(layout: Layout) throws -> Set<Data> {
         guard layout.hasSeeds else { return [] }
         let files = try FileManager.default.contentsOfDirectory(at: layout.seeds, includingPropertiesForKeys: nil)

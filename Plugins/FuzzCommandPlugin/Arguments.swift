@@ -11,6 +11,8 @@ struct Arguments {
         case reproduce(String)
         /// Shrink the corpus to the smallest set with the same coverage.
         case minimizeCorpus
+        /// Shrink one crashing input to the smallest input that still crashes.
+        case minimizeCrash(String)
     }
 
     var target: String?
@@ -43,6 +45,8 @@ struct Arguments {
                 result.mode = .replay
             case "--minimize-corpus":
                 result.mode = .minimizeCorpus
+            case "--minimize-crash":
+                result.mode = .minimizeCrash(try next("--minimize-crash"))
             case "--reproduce":
                 result.mode = .reproduce(try next("--reproduce"))
             case "--jobs":
@@ -77,6 +81,9 @@ struct Arguments {
           --replay             Run the existing corpus once and exit. For CI.
           --minimize-corpus    Shrink the corpus to the smallest set with the same
                                coverage. Seeds are never modified.
+          --minimize-crash <path>
+                               Shrink one crashing input in place to the smallest
+                               input that still crashes.
           --reproduce <path>   Run one saved input, usually a crash artefact.
           --release            Build in release configuration.
           --sanitizers <list>  Override the sanitizer set. Default: fuzzer,address
