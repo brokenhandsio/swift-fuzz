@@ -16,6 +16,22 @@ struct FuzzCommandPlugin: CommandPlugin {
         // for a toolchain without libFuzzer is unreadable.
         try Preflight.check(context: context)
 
+        // The sanitizer runtime looks for llvm-symbolizer on PATH only, and a
+        // toolchain chosen with TOOLCHAINS or xcrun usually is not on it. We
+        // already know which toolchain we are building with, so hand it over.
+        let symbolizer = try? context.tool(named: "llvm-symbolizer").url
+
+        // Before the build, not after it. Instrumenting a package the size of
+        // Vapor takes tens of minutes, and a coverage report that cannot be
+        // symbolized is worth nothing — so discovering the problem afterwards
+        // throws away the whole wait.
+        if case .coverage = options.mode {
+            let environment = FuzzEnvironment.make(target: nil, symbolizer: symbolizer)
+            guard FuzzEnvironment.hasSymbolizer(environment) else {
+                throw FuzzError(Coverage.missingSymbolizerMessage(target: options.target ?? "<target>"))
+            }
+        }
+
         let discovery = Discovery(context: context) { product in
             try build(target: product, options: options, context: context)
         }
@@ -33,7 +49,7 @@ struct FuzzCommandPlugin: CommandPlugin {
 
         if case .minimizeCrash(let path) = options.mode {
             let result = try Minimize.crash(
-                binary: binary, layout: layout, path: path,
+                binary: binary, layout: layout, path: path, symbolizer: symbolizer,
                 workDirectory: context.pluginWorkDirectoryURL, passthrough: options.passthrough)
             print("""
 
@@ -45,7 +61,8 @@ struct FuzzCommandPlugin: CommandPlugin {
 
         if case .minimizeCorpus = options.mode {
             let result = try Minimize.run(
-                binary: binary, layout: layout, workDirectory: context.pluginWorkDirectoryURL)
+                binary: binary, layout: layout, symbolizer: symbolizer,
+                workDirectory: context.pluginWorkDirectoryURL)
             print("""
 
                 swift-fuzz: minimized Corpus/\(target)
@@ -60,13 +77,21 @@ struct FuzzCommandPlugin: CommandPlugin {
             print(try Coverage.run(
                 binary: binary, layout: layout,
                 passthrough: options.passthrough, listUncovered: options.listUncovered,
+                // Everything linked into the binary is instrumented, which for a
+                // package with real dependencies means the report is mostly
+                // other people's code. Default to the package under test.
+                scope: options.includeDependencies
+                    ? nil
+                    : CoverageScope.filesUnderTest(context.package),
                 // Absent on some installs; the report is merely less readable.
                 demangler: try? context.tool(named: "swift-demangle").url,
+                symbolizer: symbolizer,
                 workDirectory: context.pluginWorkDirectoryURL))
             return
         }
 
-        let status = try run(binary: binary, options: options, layout: layout)
+        let status = try run(
+            binary: binary, options: options, layout: layout, symbolizer: symbolizer)
         try report(status: status, layout: layout, target: target, options: options)
     }
 
@@ -101,7 +126,9 @@ struct FuzzCommandPlugin: CommandPlugin {
 
     // MARK: - Run
 
-    private func run(binary: URL, options: Arguments, layout: Layout) throws -> Int32 {
+    private func run(
+        binary: URL, options: Arguments, layout: Layout, symbolizer: URL?
+    ) throws -> Int32 {
         var arguments: [String] = []
 
         // Ours first so anything the user passes overrides it.
@@ -139,19 +166,10 @@ struct FuzzCommandPlugin: CommandPlugin {
             preconditionFailure("\(options.mode) does not use the standard run path")
         }
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["FUZZ_TARGET"] = layout.target
-        #if !os(macOS)
-        // Swift's crash handler otherwise runs instead of libFuzzer's, which
-        // means the crashing input is never written and the exit code is a
-        // bare signal. Findings would be visible in the log and lost on disk.
-        environment["SWIFT_BACKTRACE"] = "enable=no"
-        #endif
-
         return try Process.stream(
             binary,
             arguments,
-            environment: environment,
+            environment: FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer),
             currentDirectory: layout.packageDirectory
         )
     }

@@ -34,6 +34,13 @@ enum Coverage {
         var coveredFunctions: Int { functions.count(where: \.isCovered) }
         var uncoveredEdges: Int { totalEdges - coveredEdges }
 
+        /// Whether the fuzzer reached this file at all.
+        ///
+        /// The distinction the report turns on: a file at 7% is where more
+        /// corpus or a dictionary pays off, while a file at 0% needs a target
+        /// of its own — or belongs to no target at all.
+        var isEntered: Bool { coveredEdges > 0 }
+
         /// Uncovered functions, in source order.
         var gaps: [Function] {
             functions.filter { !$0.isCovered }.sorted { $0.line < $1.line }
@@ -139,33 +146,60 @@ enum Coverage {
 
     // MARK: - Rolling up
 
-    /// Groups functions by source file, dropping the harness and anything with
-    /// no source of its own.
+    /// The result of rolling up a run: the files a report is about, and what
+    /// was withheld from it.
+    struct Summary {
+        let files: [File]
+        /// Files excluded for belonging to a dependency rather than to the code
+        /// under test. Counted rather than dropped silently — a coverage figure
+        /// that quietly changed its denominator would be worse than none.
+        let dependencyFiles: Int
+        let dependencyEdges: Int
+    }
+
+    /// Groups functions by source file, dropping what nobody can act on.
     ///
-    /// Three things are excluded, all of them code nobody can go and write a
-    /// test for: swift-fuzz's own sources, functions attributed to
-    /// `<compiler-generated>`, and functions reported at line 0 — default
+    /// Four things are excluded: swift-fuzz's own sources, functions attributed
+    /// to `<compiler-generated>`, functions reported at line 0 — default
     /// argument generators, implicit closures and similar, which have a file
-    /// but no line to point at. What remains is the code the package author
-    /// wrote, which is what a coverage figure should describe.
+    /// but no line to point at — and, when `scope` is given, files outside the
+    /// code under test.
     ///
     /// Files are ordered by how much they are *missing*, because the report
     /// exists to answer "where is the corpus not reaching?".
-    static func summarize(_ functions: [Function]) -> [File] {
+    static func summarize(_ functions: [Function], scope: Set<String>? = nil) -> Summary {
         var byFile: [String: [Function]] = [:]
+        var dependencies: [String: Int] = [:]
+
         for function in functions {
             guard function.file != compilerGenerated,
                   function.line > 0,
                   !harnessFiles.contains(function.file)
             else { continue }
+
+            if let scope, !scope.contains(function.file) {
+                dependencies[function.file, default: 0] += function.totalEdges
+                continue
+            }
             byFile[function.file, default: []].append(function)
         }
-        return byFile
+
+        let files = byFile
             .map { File(name: $0.key, functions: $0.value) }
-            .sorted {
-                // Biggest gap first; ties by name so the order is stable.
-                ($0.uncoveredEdges, $1.name) > ($1.uncoveredEdges, $0.name)
+            .sorted { lhs, rhs in
+                // Files the fuzzer actually entered come first. Ordering purely
+                // by biggest gap buries them: URIParse reaches 2 of Vapor's 178
+                // files, and the 176 it never entered all have larger gaps than
+                // the one file the target exists to exercise.
+                if lhs.isEntered != rhs.isEntered { return lhs.isEntered }
+                // Then biggest gap; ties by name so the order is stable.
+                return (lhs.uncoveredEdges, rhs.name) > (rhs.uncoveredEdges, lhs.name)
             }
+
+        return Summary(
+            files: files,
+            dependencyFiles: dependencies.count,
+            dependencyEdges: dependencies.values.reduce(0, +))
     }
 }
 
@@ -173,8 +207,34 @@ enum Coverage {
 
 extension Coverage {
     /// The table, plus a headline total.
-    static func render(_ files: [File], target: String, inputs: String) -> String {
+    /// How many never-entered files to list before collapsing the rest into a
+    /// count. They are ordered largest-first, so the ones worth a target of
+    /// their own are the ones that survive the cut.
+    static let untouchedLimit = 10
+
+    static func render(
+        _ summary: Summary, target: String, inputs: String, full: Bool = false
+    ) -> String {
+        let entered = summary.files.filter(\.isEntered)
+        let untouched = summary.files.filter { !$0.isEntered }
+        let files = full ? summary.files : entered + untouched.prefix(untouchedLimit)
+        let unlisted = summary.files.count - files.count
         guard !files.isEmpty else {
+            // Everything filtered out is a different problem from nothing
+            // reported, and has a different answer.
+            if summary.dependencyFiles > 0 {
+                return """
+
+                    swift-fuzz: coverage for \(target)
+                      \(inputs)
+
+                    Every one of the \(summary.dependencyFiles) files reported belongs to a dependency
+                    rather than to the code under test, so there is nothing to show.
+
+                    That usually means this target only exercises a dependency. Pass
+                    --include-dependencies to see them anyway.
+                    """
+            }
             return """
 
                 swift-fuzz: coverage for \(target)
@@ -206,8 +266,10 @@ extension Coverage {
             )
         }
 
-        let coveredEdges = files.reduce(0) { $0 + $1.coveredEdges }
-        let totalEdges = files.reduce(0) { $0 + $1.totalEdges }
+        // Over every file in scope, not just the ones listed. Capping the
+        // untouched tail must not quietly shrink the denominator.
+        let coveredEdges = summary.files.reduce(0) { $0 + $1.coveredEdges }
+        let totalEdges = summary.files.reduce(0) { $0 + $1.totalEdges }
         let fileWord = files.count == 1 ? "file" : "files"
 
         return """
@@ -218,8 +280,29 @@ extension Coverage {
             \(lines.joined(separator: "\n"))
 
               \(coveredEdges)/\(totalEdges) edges reached \
-            (\(percentage(coveredEdges, of: totalEdges))) across \(files.count) \(fileWord)
+            (\(percentage(coveredEdges, of: totalEdges))) across \(summary.files.count) \(fileWord) \
+            — \(entered.count) entered, \(untouched.count) never entered\
+            \(withheld(summary, unlisted: unlisted))
             """
+    }
+
+    /// A note about what the scope filter kept out.
+    ///
+    /// Never silent: a reader comparing two runs has to be able to see that the
+    /// denominator is the package rather than everything linked into the binary.
+    private static func withheld(_ summary: Summary, unlisted: Int) -> String {
+        var notes: [String] = []
+        if unlisted > 0 {
+            notes.append("\(unlisted) never-entered files not listed above")
+        }
+        if summary.dependencyFiles > 0 {
+            let fileWord = summary.dependencyFiles == 1 ? "file" : "files"
+            notes.append(
+                "\(summary.dependencyFiles) dependency \(fileWord) "
+                + "(\(summary.dependencyEdges) edges) excluded; --include-dependencies adds them")
+        }
+        guard !notes.isEmpty else { return "" }
+        return "\n  " + notes.joined(separator: "\n  ")
     }
 
     /// Every uncovered function, grouped by file. This is the actionable half
@@ -256,8 +339,17 @@ private extension String {
 // MARK: - Diagnostics
 
 extension Coverage {
-    /// What the sanitizer runtime prints when it cannot launch a symbolizer.
-    static let symbolizerFailure = "failed to spawn external symbolizer"
+    /// What the sanitizer runtime prints when a sandbox blocks the spawn.
+    static let symbolizerBlocked = "failed to spawn external symbolizer"
+
+    /// What it prints when there is no symbolizer at the path it was given —
+    /// including when it was given none and looked on PATH.
+    static let symbolizerMissing = "external symbolizer"
+
+    /// Whether libFuzzer failed to symbolize, for any reason.
+    static func symbolizerFailed(in diagnostics: some StringProtocol) -> Bool {
+        diagnostics.contains(symbolizerMissing)
+    }
 
     /// Coverage needs addresses turned into function names, which the sanitizer
     /// runtime does by launching `llvm-symbolizer` as a child process. SwiftPM
@@ -265,6 +357,22 @@ extension Coverage {
     /// including for a symbolizer inside the toolchain — so there is nothing
     /// this plugin can set to make it work from inside. Linux has no plugin
     /// sandbox and is unaffected.
+    /// Guidance for a symbolizer that could not be found at all.
+    static func missingSymbolizerMessage(target: String) -> String {
+        """
+        Coverage needs llvm-symbolizer to turn addresses into function names, and \
+        the sanitizer runtime could not find one.
+
+        swift-fuzz normally points it at the toolchain's copy automatically. If you \
+        are here, that lookup failed — set it explicitly:
+
+          ASAN_SYMBOLIZER_PATH=$(xcrun -f llvm-symbolizer) \\
+            swift package --allow-writing-to-package-directory fuzz \(target) --coverage
+
+        On Linux it is usually at /usr/bin/llvm-symbolizer.
+        """
+    }
+
     static func sandboxMessage(target: String) -> String {
         """
         Coverage needs llvm-symbolizer, and SwiftPM's plugin sandbox will not let \

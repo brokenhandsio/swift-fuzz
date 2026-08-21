@@ -13,7 +13,9 @@ extension Coverage {
         layout: Layout,
         passthrough: [String],
         listUncovered: Bool,
+        scope: Set<String>?,
         demangler: URL?,
+        symbolizer: URL?,
         workDirectory: URL
     ) throws -> String {
         let corpusCount = countInputs(layout.corpus)
@@ -24,6 +26,15 @@ extension Coverage {
                 Seeds/\(layout.target) are empty.
                 Run the fuzzer first, or add seeds.
                 """)
+        }
+
+        let environment = FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer)
+
+        // Before the run, not after. Replaying a large corpus takes minutes —
+        // forty of them on Vapor — and a report that cannot be symbolized is
+        // worth nothing, so finding out at the end wastes the whole thing.
+        guard FuzzEnvironment.hasSymbolizer(environment) else {
+            throw FuzzError(missingSymbolizerMessage(target: layout.target))
         }
 
         var arguments = [
@@ -37,27 +48,24 @@ extension Coverage {
         arguments += passthrough
         arguments += layout.inputDirectories
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["FUZZ_TARGET"] = layout.target
-        #if !os(macOS)
-        environment["SWIFT_BACKTRACE"] = "enable=no"
-        #endif
-
         let (status, diagnostics) = try Process.captureDiagnostics(
             binary, arguments, environment: environment,
             currentDirectory: layout.packageDirectory)
 
         let functions = parse(diagnostics)
         guard !functions.isEmpty else {
-            // The common failure by far, and it is not the user's fault.
-            if diagnostics.contains(symbolizerFailure) {
+            // Two different symbolizer failures with two different fixes.
+            if diagnostics.contains(symbolizerBlocked) {
                 throw FuzzError(sandboxMessage(target: layout.target))
+            }
+            if symbolizerFailed(in: diagnostics) {
+                throw FuzzError(missingSymbolizerMessage(target: layout.target))
             }
             throw FuzzError("""
                 libFuzzer reported no coverage data (exit \(status)).
 
                 \(status == 0
-                    ? "The build may lack debug info, or llvm-symbolizer may not be on PATH."
+                    ? "The build may lack debug info."
                     : "An input in the corpus looks to have crashed before the report was printed.")
 
                 Its output was:
@@ -73,9 +81,9 @@ extension Coverage {
         let inputs = seedCount > 0
             ? "\(corpusCount) corpus inputs, \(seedCount) seeds"
             : "\(corpusCount) corpus inputs"
-        let files = summarize(applying(readable, to: functions))
-        return render(files, target: layout.target, inputs: inputs)
-            + (listUncovered ? "\n" + renderGaps(files) : "")
+        let summary = summarize(applying(readable, to: functions), scope: scope)
+        return render(summary, target: layout.target, inputs: inputs, full: listUncovered)
+            + (listUncovered ? "\n" + renderGaps(summary.files) : "")
     }
 
     private static func countInputs(_ directory: URL) -> Int {

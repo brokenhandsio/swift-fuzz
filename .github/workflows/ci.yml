@@ -151,6 +151,17 @@ jobs:
             || { echo "::error::the report carried no edge totals"; exit 1; }
           grep -q "BuggyLibrary.swift" coverage.log \
             || { echo "::error::the code under test is missing from the report"; exit 1; }
+          grep -qE "[0-9]+ entered, [0-9]+ never entered" coverage.log \
+            || { echo "::error::the report did not split entered from never-entered files"; exit 1; }
+
+          # The report is scoped to the package under test. Anything from the
+          # toolchain or a fetched dependency means the scope filter regressed.
+          for foreign in Foundation Dispatch NIO swift/stdlib; do
+            if grep -q "$foreign" coverage.log; then
+              echo "::error::$foreign appeared in a report scoped to the package"
+              exit 1
+            fi
+          done
 
           # llvm-symbolizer does not demangle Swift, so on Linux the names go
           # through swift-demangle. A regression there leaves $s... in the log.

@@ -593,47 +593,80 @@ swift-fuzz: coverage for CBORDecode
   2541 corpus inputs, 69 seeds
 
   FILE                    EDGES       FUNCTIONS
-  CBORDecoder.swift      0/2589     0%       0/88
-  CBOREncoder.swift      0/1703     0%       0/94
-  CBOR+Encode.swift       0/547     0%       0/14
   CBORParser.swift      210/565    37%      21/21
   CBOR+Decode.swift      16/262     6%        1/6
-  CBOR+Accessors.swift    0/108     0%       0/11
   CBORTag.swift            8/66    12%       2/18
-  CBOR+Literals.swift      0/55     0%        0/7
   CBOR+Identity.swift    89/139    64%        4/5
   CBOROptions.swift        4/36    11%        2/3
   CBORDecode.swift        12/35    34%        1/3
-  ObjCShims.h               0/4     0%        0/4
+  CBORDecoder.swift      0/2589     0%       0/88
+  CBOREncoder.swift      0/1703     0%       0/94
+  CBOR+Encode.swift       0/547     0%       0/14
+  CBOR+Accessors.swift    0/108     0%       0/11
+  CBOR+Literals.swift      0/55     0%        0/7
 
-  339/6109 edges reached (6%) across 12 files
+  339/6105 edges reached (6%) across 11 files — 6 entered, 5 never entered
 ```
 
-**Read the shape, not the headline.** 6% looks alarming and means nothing on its
-own: the denominator is the whole library, and this target only ever calls the
-parser. The line that matters is `CBORParser.swift 21/21` — every function in
-the parser is entered, so the target is wired up correctly and is working the
-code it was written to work. The zeroes below it are the encoder and the
-`Codable` layer, which no decode target can reach and which need targets of
-their own.
+**Files the fuzzer entered come first**, ordered by how much of each is still
+missing; files it never entered follow, largest first. That split is the one the
+report turns on. A file at 37% is where a dictionary or better seeds pays off. A
+file at 0% was never reached at all, and wants a target of its own — or belongs
+to no target you have.
 
-That is the question the report answers well: not "is this number high" but "is
-the thing I meant to fuzz being reached at all, and what did I forget". A file
-you expected to see busy sitting at `0/…` usually means the target never
-constructs the input shape that reaches it.
+**Read the shape, not the headline.** 6% looks alarming and means little on its
+own: the denominator is every file in the package, and this target only calls
+the parser. `CBORParser.swift 21/21` is the line that matters — every function
+in the parser is entered, so the target is wired up correctly and working the
+code it was written for. The zeroes below are the encoder and the `Codable`
+layer, which no decode target can reach.
 
-Files are ordered by how much they are *missing*, so the biggest gaps read
-first. Edges lead rather than functions because a function counts once however
-large it is — a file of small accessors would otherwise outweigh the one parser
-that matters. Within a file, `210/565` says the parser is entered everywhere but
-only a third of its branches are taken; a dictionary or better seeds is the
-usual answer.
+Edges lead rather than functions because a function counts once however large it
+is — a file of small accessors would otherwise outweigh the one parser that
+matters.
 
 swift-fuzz's own sources, `<compiler-generated>` thunks, and synthesized code
-with no line to point at are all excluded, so what you are looking at is the
-code you wrote.
+with no line to point at are all excluded, so what you are looking at is the code
+you wrote.
 
-To get names rather than counts, ask for the gaps:
+### Packages with dependencies
+
+libFuzzer instruments everything linked into the binary, which for a real
+application is mostly other people's code. Fuzzing Vapor's URI parser
+unscoped reports `44/628536 edges reached (0%) across 1455 files`, and the first
+page is NIO, swift-collections and swift-configuration. Not one Vapor file
+appears before the fold.
+
+So the report covers **the package under test** by default: the fuzz package
+itself, plus every package reached from it that is checked out locally rather
+than fetched. A package you point at with a path is one you are working on; a
+package from a repository or registry is one you are merely linking. The same
+target then reads:
+
+```
+  FILE                          EDGES       FUNCTIONS
+  URI.swift                    42/603     7%      12/37
+  URITargets.swift               2/40     5%        1/4
+  FileIO.swift                 0/2059     0%       0/57
+  EndpointCache.swift          0/1547     0%       0/29
+  ...
+
+  44/44680 edges reached (0%) across 178 files — 2 entered, 176 never entered
+  166 never-entered files not listed above
+  1277 dependency files (583856 edges) excluded; --include-dependencies adds them
+```
+
+`URI.swift`, which is what `URIParse` exists to exercise, is now the first line
+rather than the twenty-second. The never-entered tail is capped at ten so a
+package with hundreds of files stays readable; what was left out is always
+stated, never silently dropped. `--include-dependencies` widens the scope back
+to everything linked in.
+
+Matching is by file name, because that is all libFuzzer reports. Two packages
+that both contain an `Extensions.swift` would let the dependency's copy through
+— over-inclusion being much the safer direction.
+
+### Naming what was missed
 
 ```bash
 swift package --allow-writing-to-package-directory fuzz CBORDecode --uncovered
@@ -641,11 +674,13 @@ swift package --allow-writing-to-package-directory fuzz CBORDecode --uncovered
 
 ```
   Uncovered functions:
-    CBORDecoder.swift
-      CBORDecoder.decode<A>(_:from:)  CBORDecoder.swift:23
-      _CBORDecoder.container<A>(keyedBy:)  CBORDecoder.swift:57
-      ...
+    CBORParser.swift
+      CBORParser.parseBigNum()  CBORParser.swift:210
+    ...
 ```
+
+`--uncovered` also turns off the cap on never-entered files, so it is the full
+picture rather than the readable summary.
 
 ### On macOS, add `--disable-sandbox`
 
@@ -663,6 +698,15 @@ which is also why this is a non-issue in CI.
 
 The same sandbox is why crash stack traces on macOS carry function names but no
 file and line. `--disable-sandbox` restores those too.
+
+swift-fuzz points the sanitizer runtime at the toolchain's `llvm-symbolizer`
+itself, via `ASAN_SYMBOLIZER_PATH`. The runtime otherwise searches only `PATH`,
+and a toolchain selected with `TOOLCHAINS` or `xcrun` frequently is not on it —
+which produced a coverage run that built for forty minutes and then died with
+`Failed to use and restart external symbolizer!`. If a symbolizer cannot be
+found at all, `--coverage` now says so before starting the build rather than
+after. Setting `ASAN_SYMBOLIZER_PATH` yourself still wins.
+
 
 ## OSS-Fuzz
 

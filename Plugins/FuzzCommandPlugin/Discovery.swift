@@ -34,11 +34,9 @@ struct Discovery {
     /// Builds `product` and asks it what it registers.
     func inspect(_ product: String) throws -> Executable {
         let binary = try build(product)
-        var environment = ProcessInfo.processInfo.environment
-        environment["FUZZ_LIST_TARGETS"] = "1"
-        #if !os(macOS)
-        environment["SWIFT_BACKTRACE"] = "enable=no"
-        #endif
+        // No target and no symbolizer: this only asks the binary what it
+        // registers, and exits before running anything.
+        let environment = FuzzEnvironment.make(target: nil, symbolizer: nil, listTargets: true)
         let output = try Process.captureOutput(binary, [], environment: environment) ?? ""
         let targets = output
             .split(separator: "\n")

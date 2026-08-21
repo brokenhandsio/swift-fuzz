@@ -19,7 +19,9 @@ enum Minimize {
     ///
     /// Seeds themselves are never written: they are an input to the merge and
     /// nothing more.
-    static func run(binary: URL, layout: Layout, workDirectory: URL) throws -> Result {
+    static func run(
+        binary: URL, layout: Layout, symbolizer: URL?, workDirectory: URL
+    ) throws -> Result {
         let before = try measure(layout.corpus)
         guard before.files > 0 else {
             throw FuzzError("Corpus/\(layout.target) is empty; nothing to minimize.")
@@ -37,7 +39,7 @@ enum Minimize {
 
         let status = try Process.stream(
             binary, arguments,
-            environment: environment(for: layout),
+            environment: FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer),
             currentDirectory: layout.packageDirectory
         )
         guard status == 0 else {
@@ -83,7 +85,8 @@ enum Minimize {
     /// artefact stops looking like the bug you were chasing, the original is in
     /// version control.
     static func crash(
-        binary: URL, layout: Layout, path: String, workDirectory: URL, passthrough: [String]
+        binary: URL, layout: Layout, path: String, symbolizer: URL?,
+        workDirectory: URL, passthrough: [String]
     ) throws -> Result {
         let input = URL(fileURLWithPath: path, relativeTo: layout.packageDirectory)
         guard FileManager.default.fileExists(atPath: input.path) else {
@@ -105,7 +108,7 @@ enum Minimize {
 
         let status = try Process.stream(
             binary, arguments,
-            environment: environment(for: layout),
+            environment: FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer),
             currentDirectory: layout.packageDirectory
         )
 
@@ -141,12 +144,4 @@ enum Minimize {
         return (files.count, bytes)
     }
 
-    private static func environment(for layout: Layout) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        environment["FUZZ_TARGET"] = layout.target
-        #if !os(macOS)
-        environment["SWIFT_BACKTRACE"] = "enable=no"
-        #endif
-        return environment
-    }
 }

@@ -27,6 +27,8 @@ struct Arguments {
     var passthrough: [String] = []
     /// Whether a coverage report should name every function it did not reach.
     var listUncovered = false
+    /// Whether a coverage report should include files from dependencies.
+    var includeDependencies = false
 
     static func parse(_ arguments: [String]) throws -> Arguments {
         var result = Arguments()
@@ -59,6 +61,8 @@ struct Arguments {
                 // anything else.
                 result.mode = .coverage
                 result.listUncovered = true
+            case "--include-dependencies":
+                result.includeDependencies = true
             case "--minimize-corpus":
                 result.mode = .minimizeCorpus
             case "--minimize-crash":
@@ -101,6 +105,10 @@ struct Arguments {
                                nothing.
           --uncovered          As --coverage, and additionally name every
                                function the corpus never reached.
+          --include-dependencies
+                               Include dependency source files in the coverage
+                               report. By default it covers only the package
+                               under test.
           --minimize-corpus    Shrink the corpus to the smallest set with the same
                                coverage. Seeds are never modified.
           --minimize-crash <path>
