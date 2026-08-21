@@ -357,6 +357,26 @@ extension Coverage {
     /// including for a symbolizer inside the toolchain — so there is nothing
     /// this plugin can set to make it work from inside. Linux has no plugin
     /// sandbox and is unaffected.
+    /// Guidance for a run that died partway through.
+    ///
+    /// libFuzzer prints a `COVERAGE:` block even when it stops on a crashing
+    /// input, and that block reflects almost nothing — every function comes
+    /// back uncovered. Rendering it produces a confident, entirely wrong "your
+    /// corpus reaches 0% of your package", which is worse than no report: it
+    /// reads as a finding rather than as a failure.
+    static func crashedMessage(target: String, status: Int32) -> String {
+        """
+        Coverage stopped at a crashing input (exit \(status)), so what libFuzzer \
+        printed describes almost nothing and has been suppressed rather than shown.
+
+        An input in Corpus/\(target) or Seeds/\(target) crashes this target. Find it with:
+
+          swift package --allow-writing-to-package-directory fuzz \(target) --replay
+
+        Fix the crash or remove the input, then ask for coverage again.
+        """
+    }
+
     /// Guidance for a symbolizer that could not be found at all.
     static func missingSymbolizerMessage(target: String) -> String {
         """

@@ -333,6 +333,21 @@ struct CoverageTests {
         #expect(!missing.contains(Coverage.symbolizerBlocked))
     }
 
+    // libFuzzer prints a COVERAGE block even when it dies on a crashing input,
+    // and every function in it comes back uncovered. Rendering that produced a
+    // confident "0/44680 edges reached (0%)" for a target whose corpus held one
+    // crashing input — a wrong finding rather than a visible failure.
+    @Test("A run that died is reported as a failure, not as zero coverage")
+    func crashedRunMessage() {
+        let message = Coverage.crashedMessage(target: "URIComponents", status: 77)
+        #expect(message.contains("exit 77"))
+        #expect(message.contains("Corpus/URIComponents"))
+        // Points at the verb that identifies which input it is.
+        #expect(message.contains("--replay"))
+        // Must not read as a coverage figure.
+        #expect(!message.contains("edges reached"))
+    }
+
     @Test("The missing-symbolizer message names the variable that fixes it")
     func missingSymbolizerMessage() {
         let message = Coverage.missingSymbolizerMessage(target: "MyTarget")

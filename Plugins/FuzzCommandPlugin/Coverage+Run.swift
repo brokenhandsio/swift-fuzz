@@ -52,6 +52,15 @@ extension Coverage {
             binary, arguments, environment: environment,
             currentDirectory: layout.packageDirectory)
 
+        // Before looking at what was printed. A run that died partway through
+        // still prints a coverage block, and it is one where nothing is
+        // covered — so a crashing corpus input would otherwise be reported as
+        // a package with no coverage at all. Vapor's URIComponents did exactly
+        // that: a confident `0/44680 edges reached (0%)` that meant nothing.
+        guard status == 0 else {
+            throw FuzzError(crashedMessage(target: layout.target, status: status))
+        }
+
         let functions = parse(diagnostics)
         guard !functions.isEmpty else {
             // Two different symbolizer failures with two different fixes.
@@ -64,9 +73,7 @@ extension Coverage {
             throw FuzzError("""
                 libFuzzer reported no coverage data (exit \(status)).
 
-                \(status == 0
-                    ? "The build may lack debug info."
-                    : "An input in the corpus looks to have crashed before the report was printed.")
+                The build may lack debug info.
 
                 Its output was:
                 \(tail(diagnostics))
