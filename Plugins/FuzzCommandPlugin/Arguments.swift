@@ -122,6 +122,10 @@ struct Arguments {
 
         Any other -flag is passed straight through to libFuzzer, so -max_len=64,
         -rss_limit_mb=4096, -dict=... and friends all work.
+
+        On macOS, --coverage also needs --disable-sandbox: SwiftPM's plugin
+        sandbox stops the sanitizer runtime launching llvm-symbolizer, which
+        coverage needs to name what it found. Linux needs nothing extra.
         """
 }
 
