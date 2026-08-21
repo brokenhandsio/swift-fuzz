@@ -13,6 +13,8 @@ struct Arguments {
         case minimizeCorpus
         /// Shrink one crashing input to the smallest input that still crashes.
         case minimizeCrash(String)
+        /// Report which parts of the code under test the corpus reaches.
+        case coverage
         /// Print the fuzz targets this package registers, and exit.
         case list
     }
@@ -23,6 +25,8 @@ struct Arguments {
     var sanitizers = "fuzzer,address"
     /// Flags handed straight to libFuzzer, after our defaults so they win.
     var passthrough: [String] = []
+    /// Whether a coverage report should name every function it did not reach.
+    var listUncovered = false
 
     static func parse(_ arguments: [String]) throws -> Arguments {
         var result = Arguments()
@@ -47,6 +51,14 @@ struct Arguments {
                 result.mode = .list
             case "--replay":
                 result.mode = .replay
+            case "--coverage":
+                result.mode = .coverage
+            case "--uncovered":
+                // Implies --coverage: the listing is part of that report, and
+                // asking for it without asking for coverage cannot mean
+                // anything else.
+                result.mode = .coverage
+                result.listUncovered = true
             case "--minimize-corpus":
                 result.mode = .minimizeCorpus
             case "--minimize-crash":
@@ -84,6 +96,11 @@ struct Arguments {
           --jobs <n>           Run n fuzzing processes in parallel.
           --list               Print the fuzz targets this package registers.
           --replay             Run the existing corpus once and exit. For CI.
+          --coverage           Report which source files the corpus reaches, and
+                               how much of each. Runs the corpus once; mutates
+                               nothing.
+          --uncovered          As --coverage, and additionally name every
+                               function the corpus never reached.
           --minimize-corpus    Shrink the corpus to the smallest set with the same
                                coverage. Seeds are never modified.
           --minimize-crash <path>

@@ -1,0 +1,1 @@
+../../Plugins/FuzzCommandPlugin/Coverage.swift

@@ -413,6 +413,8 @@ swift package --allow-writing-to-package-directory fuzz <target> [options]
   --time <seconds>     Stop after this many seconds.
   --jobs <n>           Run n fuzzing processes in parallel.
   --replay             Run the existing corpus once and exit. For CI.
+  --coverage           Report which source files the corpus reaches.
+  --uncovered          As --coverage, plus every function it never reached.
   --reproduce <path>   Run one saved input, usually a crash artefact.
   --minimize-crash <path>
                        Shrink a crashing input, in place, to the smallest input
@@ -575,6 +577,92 @@ file, not a hypothetical path:
 ```bash
 touch Crashes/SomeTarget/crash-test && git check-ignore -v Crashes/SomeTarget/crash-test
 ```
+
+## Coverage
+
+Fuzzing has an uncomfortable failure mode: it runs happily for hours, reports no
+crashes, and never got anywhere near the code you care about. `--coverage` runs
+the corpus once and says where it actually went.
+
+```bash
+swift package --allow-writing-to-package-directory fuzz CBORDecode --coverage
+```
+
+```
+swift-fuzz: coverage for CBORDecode
+  2541 corpus inputs, 69 seeds
+
+  FILE                    EDGES       FUNCTIONS
+  CBORDecoder.swift      0/2589     0%       0/88
+  CBOREncoder.swift      0/1703     0%       0/94
+  CBOR+Encode.swift       0/547     0%       0/14
+  CBORParser.swift      210/565    37%      21/21
+  CBOR+Decode.swift      16/262     6%        1/6
+  CBOR+Accessors.swift    0/108     0%       0/11
+  CBORTag.swift            8/66    12%       2/18
+  CBOR+Literals.swift      0/55     0%        0/7
+  CBOR+Identity.swift    89/139    64%        4/5
+  CBOROptions.swift        4/36    11%        2/3
+  CBORDecode.swift        12/35    34%        1/3
+  ObjCShims.h               0/4     0%        0/4
+
+  339/6109 edges reached (6%) across 12 files
+```
+
+**Read the shape, not the headline.** 6% looks alarming and means nothing on its
+own: the denominator is the whole library, and this target only ever calls the
+parser. The line that matters is `CBORParser.swift 21/21` — every function in
+the parser is entered, so the target is wired up correctly and is working the
+code it was written to work. The zeroes below it are the encoder and the
+`Codable` layer, which no decode target can reach and which need targets of
+their own.
+
+That is the question the report answers well: not "is this number high" but "is
+the thing I meant to fuzz being reached at all, and what did I forget". A file
+you expected to see busy sitting at `0/…` usually means the target never
+constructs the input shape that reaches it.
+
+Files are ordered by how much they are *missing*, so the biggest gaps read
+first. Edges lead rather than functions because a function counts once however
+large it is — a file of small accessors would otherwise outweigh the one parser
+that matters. Within a file, `210/565` says the parser is entered everywhere but
+only a third of its branches are taken; a dictionary or better seeds is the
+usual answer.
+
+swift-fuzz's own sources, `<compiler-generated>` thunks, and synthesized code
+with no line to point at are all excluded, so what you are looking at is the
+code you wrote.
+
+To get names rather than counts, ask for the gaps:
+
+```bash
+swift package --allow-writing-to-package-directory fuzz CBORDecode --uncovered
+```
+
+```
+  Uncovered functions:
+    CBORDecoder.swift
+      CBORDecoder.decode<A>(_:from:)  CBORDecoder.swift:23
+      _CBORDecoder.container<A>(keyedBy:)  CBORDecoder.swift:57
+      ...
+```
+
+### On macOS, add `--disable-sandbox`
+
+```bash
+swift package --disable-sandbox --allow-writing-to-package-directory \
+  fuzz CBORDecode --coverage
+```
+
+libFuzzer turns addresses into function names by launching `llvm-symbolizer` as
+a child process, and SwiftPM's macOS plugin sandbox denies that spawn — including
+for a symbolizer inside the toolchain, so there is nothing swift-fuzz can
+configure to avoid it. Without the flag you get a clear error rather than a
+silently empty report. Linux has no plugin sandbox and needs nothing extra,
+which is also why this is a non-issue in CI.
+
+The same sandbox is why crash stack traces on macOS carry function names but no
+file and line. `--disable-sandbox` restores those too.
 
 ## OSS-Fuzz
 

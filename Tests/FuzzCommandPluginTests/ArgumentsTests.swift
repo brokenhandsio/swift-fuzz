@@ -29,6 +29,31 @@ struct ArgumentsTests {
 
     // MARK: Modes
 
+    @Test("--coverage selects coverage mode")
+    func coverageMode() throws {
+        let options = try Arguments.parse(["T", "--coverage"])
+        guard case .coverage = options.mode else {
+            Issue.record("expected .coverage")
+            return
+        }
+        #expect(!options.listUncovered)
+    }
+
+    @Test("--uncovered implies --coverage, so it means something on its own")
+    func uncoveredImpliesCoverage() throws {
+        let options = try Arguments.parse(["T", "--uncovered"])
+        guard case .coverage = options.mode else {
+            Issue.record("expected .coverage")
+            return
+        }
+        #expect(options.listUncovered)
+    }
+
+    @Test("--coverage --uncovered is the same as --uncovered")
+    func coverageWithUncovered() throws {
+        #expect(try Arguments.parse(["T", "--coverage", "--uncovered"]).listUncovered)
+    }
+
     @Test("Default mode is fuzzing")
     func defaultMode() throws {
         guard case .fuzz = try Arguments.parse(["T"]).mode else {

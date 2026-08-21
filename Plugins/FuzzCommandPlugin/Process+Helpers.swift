@@ -75,3 +75,35 @@ extension Process {
         return process.terminationStatus
     }
 }
+
+extension Process {
+    /// Runs a tool and returns its exit status together with everything it
+    /// wrote to standard error.
+    ///
+    /// libFuzzer writes all of its diagnostics — progress, coverage dumps,
+    /// crash reports — to standard error, so that is the interesting stream.
+    /// Standard output is discarded rather than piped: nothing useful arrives
+    /// on it, and an unread pipe would deadlock a chatty fuzz target.
+    static func captureDiagnostics(
+        _ executable: URL,
+        _ arguments: [String],
+        environment: [String: String],
+        currentDirectory: URL
+    ) throws -> (status: Int32, diagnostics: String) {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        process.currentDirectoryURL = currentDirectory
+        let pipe = Pipe()
+        process.standardError = pipe
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let status = process.terminationReason == .uncaughtSignal
+            ? 128 + process.terminationStatus
+            : process.terminationStatus
+        return (status, String(decoding: data, as: UTF8.self))
+    }
+}

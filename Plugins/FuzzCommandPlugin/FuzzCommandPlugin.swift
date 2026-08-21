@@ -56,6 +56,16 @@ struct FuzzCommandPlugin: CommandPlugin {
             return
         }
 
+        if case .coverage = options.mode {
+            print(try Coverage.run(
+                binary: binary, layout: layout,
+                passthrough: options.passthrough, listUncovered: options.listUncovered,
+                // Absent on some installs; the report is merely less readable.
+                demangler: try? context.tool(named: "swift-demangle").url,
+                workDirectory: context.pluginWorkDirectoryURL))
+            return
+        }
+
         let status = try run(binary: binary, options: options, layout: layout)
         try report(status: status, layout: layout, target: target, options: options)
     }
@@ -124,7 +134,7 @@ struct FuzzCommandPlugin: CommandPlugin {
         case .reproduce(let path):
             arguments += options.passthrough
             arguments.append(path)
-        case .minimizeCorpus, .minimizeCrash, .list:
+        case .minimizeCorpus, .minimizeCrash, .list, .coverage:
             // Handled before this point; neither uses the standard run path.
             preconditionFailure("\(options.mode) does not use the standard run path")
         }
