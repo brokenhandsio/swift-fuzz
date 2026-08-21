@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import Fuzzing
+// SPI import: FuzzRunner's entry points are not public API.
+@_spi(Generated) @testable import Fuzzing
 
 // Serialized because these mutate `FuzzRunner`'s process-global registry, which
 // is deliberately unsynchronised: libFuzzer registers once, on one thread,
@@ -62,6 +63,15 @@ struct FuzzTargetTests {
         FuzzTarget.structuredAsync("structured-async-probe") { _ in }
         #expect(FuzzRunner.registeredNames.contains("async-probe"))
         #expect(FuzzRunner.registeredNames.contains("structured-async-probe"))
+    }
+
+    @Test("An array-bodied target receives a copy of the input")
+    func bytesTarget() {
+        let seen = Box<[UInt8]>([])
+        let target = FuzzTarget.bytes("bytes-probe") { seen.value = $0 }
+        let input: [UInt8] = [7, 8, 9]
+        unsafe input.withUnsafeBytes { unsafe target.body($0) }
+        #expect(seen.value == input)
     }
 
     @Test("A zero-length input is delivered as an empty buffer, not a crash")

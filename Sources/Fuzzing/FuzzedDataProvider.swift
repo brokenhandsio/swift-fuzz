@@ -105,6 +105,43 @@ public struct FuzzedDataProvider {
         bytes(remainingCount)
     }
 
+    /// Consumes a length, then that many bytes.
+    ///
+    /// The idiom for a harness that needs several values out of one input: the
+    /// length is a control value from the back, the bytes come off the front,
+    /// so the payload stays contiguous and mutating it does not shift the
+    /// values already drawn.
+    ///
+    /// Bounded at 255 bytes per chunk, so a single byte of input cannot ask for
+    /// the whole buffer and starve everything drawn after it.
+    public mutating func chunk() -> [UInt8] {
+        bytes(Int(integer(in: UInt8.min...UInt8.max)))
+    }
+
+    /// Consumes a ``chunk()`` as UTF-8 text.
+    ///
+    /// Invalid sequences become replacement characters rather than failing: the
+    /// point is to reach the code under test, and the replacement character is
+    /// itself worth testing — text handling frequently goes wrong on it.
+    public mutating func text() -> String {
+        String(decoding: chunk(), as: UTF8.self)
+    }
+
+    /// Consumes a ``chunk()`` as UTF-8 text, or `nil` if the chunk is empty.
+    ///
+    /// For APIs where absent and present-but-empty differ — a URL with no
+    /// scheme is not a URL whose scheme is `""` — so an empty chunk tests the
+    /// former rather than accidentally testing the latter.
+    public mutating func optionalText() -> String? {
+        let chunk = chunk()
+        return chunk.isEmpty ? nil : String(decoding: chunk, as: UTF8.self)
+    }
+
+    /// Consumes everything that is left, as UTF-8 text.
+    public mutating func remainingText() -> String {
+        String(decoding: remainingBytes(), as: UTF8.self)
+    }
+
     // MARK: - Control values, taken from the back
 
     /// Consumes a value of `type`, using its full range.

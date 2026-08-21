@@ -28,7 +28,7 @@
 ///
 /// Marked `@safe` because holding a closure that takes libFuzzer's buffer is
 /// not itself unsafe — the pointer exists only during a call, inside
-/// ``FuzzRunner/run(_:_:)``.
+/// `FuzzRunner.run`.
 @safe
 public struct FuzzTarget: Sendable {
     /// The target's name, as passed to `swift package fuzz <name>`.
@@ -68,6 +68,29 @@ public struct FuzzTarget: Sendable {
         self.name = name
         unsafe self.body = body
         FuzzRunner.register(self)
+    }
+
+    /// Creates and registers a fuzz target whose body receives the input as an
+    /// array.
+    ///
+    /// ```swift
+    /// FuzzTarget.bytes("Decode") { bytes in
+    ///     _ = try? JSONDecoder().decode(Probe.self, from: Data(bytes))
+    /// }
+    /// ```
+    ///
+    /// Use this when the code under test takes a collection — most existing
+    /// APIs do. ``init(_:_:)`` hands over a `Span<UInt8>` instead, which copies
+    /// nothing and suits an API that can take one directly; this copies once
+    /// per execution, which is invisible next to any real parsing work.
+    @discardableResult
+    public static func bytes(
+        _ name: String,
+        _ body: @escaping @Sendable ([UInt8]) -> Void
+    ) -> FuzzTarget {
+        unsafe FuzzTarget(name: name, unsafeBytes: { buffer in
+            body(unsafe [UInt8](buffer))
+        })
     }
 
     /// Creates and registers a fuzz target that reads typed values instead of

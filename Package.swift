@@ -14,9 +14,16 @@ let extraSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "swift-fuzz",
-    // macOS 26 for `Span`, which lets the fuzz body receive a bounds-checked,
-    // non-escapable view of libFuzzer's buffer instead of an unsafe pointer.
-    platforms: [.macOS(.v26)],
+    // v26 throughout, which is what lets the API be expressed in terms of `Span`
+    // and removes the need to annotate the concurrency entry points.
+    platforms: [
+        .macOS(.v26),
+        .iOS(.v26),
+        .tvOS(.v26),
+        .macCatalyst(.v26),
+        .visionOS(.v26),
+        .watchOS(.v26),
+    ],
     products: [
         .library(name: "Fuzzing", targets: ["Fuzzing"]),
         .plugin(name: "FuzzTargetPlugin", targets: ["FuzzTargetPlugin"]),

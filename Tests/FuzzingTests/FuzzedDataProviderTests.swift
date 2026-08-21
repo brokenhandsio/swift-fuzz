@@ -1,5 +1,6 @@
 import Testing
-@testable import Fuzzing
+// SPI import: FuzzRunner's entry points are not public API.
+@_spi(Generated) @testable import Fuzzing
 
 /// Runs `body` with a provider over `bytes`.
 private func withProvider<T>(_ bytes: [UInt8], _ body: (inout FuzzedDataProvider) -> T) -> T {
@@ -120,6 +121,59 @@ struct FuzzedDataProviderTests {
             _ = data.remainingBytes()
             #expect(data.isEmpty)
         }
+    }
+}
+
+@Suite("Length-prefixed values")
+struct ChunkTests {
+    @Test("A chunk takes its length from the back and its bytes from the front")
+    func chunkSplitsEnds() {
+        // Length byte 0x03 is at the back; the three bytes come off the front.
+        let chunk = withProvider([1, 2, 3, 4, 5, 0x03]) { $0.chunk() }
+        #expect(chunk == [1, 2, 3])
+    }
+
+    @Test("Several chunks come out in order without overlapping")
+    func severalChunks() {
+        // Lengths 2 then 3, read from the back in that order.
+        let (first, second) = withProvider([1, 2, 3, 4, 5, 0x03, 0x02]) { data in
+            (data.chunk(), data.chunk())
+        }
+        #expect(first == [1, 2])
+        #expect(second == [3, 4, 5])
+    }
+
+    @Test("A chunk is truncated rather than failing when the input is short")
+    func chunkTruncates() {
+        let chunk = withProvider([1, 2, 0xFF]) { $0.chunk() }
+        #expect(chunk == [1, 2])
+    }
+
+    @Test("An exhausted provider yields an empty chunk")
+    func chunkOnEmpty() {
+        #expect(withProvider([]) { $0.chunk() }.isEmpty)
+    }
+
+    @Test("Text repairs invalid UTF-8 rather than failing")
+    func textIsTotal() {
+        let text = withProvider([0xFF, 0x41, 0x02]) { $0.text() }
+        #expect(text.contains("A"))
+    }
+
+    @Test("optionalText distinguishes absent from empty")
+    func optionalTextSeparatesAbsentFromEmpty() {
+        // An APIs where "no scheme" and "empty scheme" differ needs this.
+        #expect(withProvider([0x00]) { $0.optionalText() } == nil)
+        #expect(withProvider([0x41, 0x01]) { $0.optionalText() } == "A")
+    }
+
+    @Test("remainingText takes everything left")
+    func remainingText() {
+        let (first, rest) = withProvider([0x41, 0x42, 0x43, 0x01]) { data in
+            (data.chunk(), data.remainingText())
+        }
+        #expect(first == [0x41])
+        #expect(rest == "BC")
     }
 }
 

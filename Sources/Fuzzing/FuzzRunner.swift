@@ -6,9 +6,15 @@ import Glibc
 
 /// The registry the generated entry point talks to.
 ///
-/// You do not normally call any of this directly. `FuzzTargetPlugin` generates
-/// a small shim that calls ``initialize()`` from `LLVMFuzzerInitialize` and
-/// ``run(_:_:)`` from `LLVMFuzzerTestOneInput`.
+/// Not part of the public API. `FuzzTargetPlugin` generates a shim that calls
+/// ``initialize()`` from `LLVMFuzzerInitialize` and ``run(_:_:)`` from
+/// `LLVMFuzzerTestOneInput`; those two are exposed under the `Generated` SPI so
+/// the generated file can reach them, and nothing else here escapes the module.
+///
+/// Keeping this out of the public surface matters for more than tidiness:
+/// ``run(_:_:)`` takes an unsafe pointer, and it is the only such signature
+/// left. A user who never sees it cannot misuse it, and a 1.0 does not freeze
+/// it.
 ///
 /// ### Concurrency
 ///
@@ -19,7 +25,7 @@ import Glibc
 /// is read-only afterwards, which is why it is `nonisolated(unsafe)` rather
 /// than locked — a lock on ``run(_:_:)`` would be taken millions of times per
 /// second for no benefit.
-public enum FuzzRunner {
+@_spi(Generated) public enum FuzzRunner {
     /// Every target registered by the `fuzzTargets` closure.
     @safe nonisolated(unsafe) private static var registered: [FuzzTarget] = []
 
@@ -31,7 +37,7 @@ public enum FuzzRunner {
     ///
     /// Override with `FUZZ_ASYNC_TIMEOUT`. Generous by default: a false
     /// positive aborts a run that was merely slow, which is worse than waiting.
-    public static var asyncTimeout: Int {
+    static var asyncTimeout: Int {
         environmentValue("FUZZ_ASYNC_TIMEOUT").flatMap(Int.init) ?? 60
     }
 
@@ -40,7 +46,7 @@ public enum FuzzRunner {
     /// Aborts rather than returning, so libFuzzer records the input alongside
     /// the explanation — a stalled input is worth keeping even when the cause
     /// turns out to be the harness.
-    public static func reportStall() -> Never {
+    static func reportStall() -> Never {
         fail("""
             An asynchronous fuzz body did not finish within \(asyncTimeout)s.
 
@@ -55,12 +61,12 @@ public enum FuzzRunner {
     }
 
     /// Registers a target. Called by ``FuzzTarget/init(_:_:)``.
-    public static func register(_ target: FuzzTarget) {
+    static func register(_ target: FuzzTarget) {
         registered.append(target)
     }
 
     /// The names of all registered targets, in declaration order.
-    public static var registeredNames: [String] {
+    static var registeredNames: [String] {
         registered.map(\.name)
     }
 
@@ -76,7 +82,7 @@ public enum FuzzRunner {
     /// - Note: Called from `LLVMFuzzerInitialize`. Terminates the process with
     ///   an explanatory message if selection is ambiguous or impossible; there
     ///   is no useful way to continue.
-    public static func initialize() {
+    @_spi(Generated) public static func initialize() {
         // Asked by `swift package fuzz` to discover what this executable
         // registers. The registry is the only source of truth for that — the
         // names live in a closure, so nothing outside the process can know them
@@ -124,7 +130,7 @@ public enum FuzzRunner {
     /// - Returns: `0`, always — libFuzzer treats any non-zero return as a
     ///   request to reject the input from the corpus, which is not something
     ///   this API exposes yet.
-    public static func run(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
+    @_spi(Generated) public static func run(_ data: UnsafeRawPointer?, _ size: Int) -> CInt {
         guard let selected else {
             fail("FuzzRunner.run was called before FuzzRunner.initialize.")
         }

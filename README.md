@@ -17,9 +17,19 @@ let fuzzTargets: @Sendable () -> Void = {
 The body receives a `Span<UInt8>`: bounds-checked, and non-escapable so the
 compiler enforces that it does not outlive the call. Nothing in swift-fuzz's API
 hands you a pointer, so a harness needs no `unsafe` even in a package with
-`.strictMemorySafety()` enabled. An API that already takes a `Span` — which is
-increasingly the idiom for parsers — can be handed the fuzzer's bytes with
-nothing copied.
+`.strictMemorySafety()` enabled.
+
+Which entry point you want depends on what the code under test takes:
+
+| | body receives | use when |
+|---|---|---|
+| `FuzzTarget(_:_:)` | `Span<UInt8>` | the API takes a `Span` — nothing is copied |
+| `FuzzTarget.bytes(_:_:)` | `[UInt8]` | the API takes a collection, which most do |
+| `FuzzTarget.structured(_:_:)` | `FuzzedDataProvider` | you need several values out of one input |
+| `FuzzTarget.async(_:_:)` | `[UInt8]`, `async` | the code under test is asynchronous |
+
+`bytes` copies once per execution, which is invisible next to any real parsing
+work. Reach for `Span` when the API can take one directly.
 
 ```bash
 swift package --allow-writing-to-package-directory fuzz CBORDecode --time 60
@@ -273,6 +283,25 @@ invalidate what the fuzzer has learned about them.
 This is also the form to prefer under `.strictMemorySafety()` — the provider
 owns the unsafe buffer, so the harness needs no `unsafe` of its own.
 
+### Drawing several values
+
+`chunk()` takes a length from the back of the input and that many bytes off the
+front, which is the idiom for a harness that needs more than one value:
+
+```swift
+FuzzTarget.structured("URIParse") { data in
+    let scheme = data.optionalText()   // nil when absent, "" is a different case
+    let host = data.text()
+    let path = data.remainingText()
+    _ = URI(scheme: scheme, host: host, path: path)
+}
+```
+
+`text()`, `optionalText()` and `remainingText()` are the UTF-8 forms, repairing
+invalid sequences rather than failing. Chunks are bounded at 255 bytes, so one
+byte of input cannot claim the whole buffer and starve everything drawn after
+it.
+
 ### Fuzzable
 
 Types can build themselves from the provider:
@@ -343,10 +372,6 @@ That overhead is invisible against real asynchronous work and dominant against a
 body that only parses a few bytes, so keep synchronous targets synchronous.
 
 The bytes are copied, so unlike the synchronous forms the body may keep them.
-
-Asynchronous targets need a deployment target of macOS 10.15 or later;
-swift-fuzz itself declares no platform floor, so your fuzzing package should
-declare one if it uses them.
 
 ## Several targets in one executable
 

@@ -1,9 +1,5 @@
 import Dispatch
 
-// Gated with `@available` rather than by raising the package's platform floor:
-// a floor would force every consumer's fuzzing package to declare a matching
-// one, whether or not it uses an asynchronous target.
-@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension FuzzTarget {
     /// Creates and registers a fuzz target whose body is asynchronous.
     ///
@@ -32,7 +28,7 @@ extension FuzzTarget {
     /// isolation from where it is written, which is the silent way to get here.
     /// What no attribute can prevent is an explicit hop inside the body — an
     /// `await MainActor.run { }` — so a stalled execution is reported after
-    /// ``FuzzRunner/asyncTimeout`` seconds rather than hanging for ever.
+    /// `FuzzRunner.asyncTimeout` seconds rather than hanging for ever.
     ///
     /// ### Cost
     ///
@@ -82,7 +78,6 @@ extension FuzzTarget {
 }
 
 /// Runs `operation` to completion, blocking the caller.
-@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 ///
 /// Deliberately not general-purpose: it is correct only because libFuzzer calls
 /// the fuzz entry point on a thread that owns nothing the operation needs.
