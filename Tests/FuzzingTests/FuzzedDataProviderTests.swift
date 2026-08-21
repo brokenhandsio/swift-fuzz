@@ -124,29 +124,53 @@ struct FuzzedDataProviderTests {
     }
 }
 
+/// Builds an input whose first ``FuzzedDataProvider/chunk()`` is exactly
+/// `payload`, by searching for control bytes that draw that length.
+///
+/// The tests below used to hand-write a single length byte at the back. That
+/// encoded the drawing scheme into every assertion, so changing the scheme
+/// broke eight tests that were not about the scheme at all. Searching for the
+/// bytes keeps each test about the property it names.
+private func inputYielding(chunk payload: [UInt8], followedBy rest: [UInt8] = []) -> [UInt8] {
+    for high in UInt8.min...UInt8.max {
+        for low in UInt8.min...UInt8.max {
+            let input = payload + rest + [high, low]
+            if withProvider(input, { $0.chunk() }) == payload { return input }
+        }
+    }
+    Issue.record("no input draws a chunk of \(payload.count) bytes")
+    return payload
+}
+
 @Suite("Length-prefixed values")
 struct ChunkTests {
-    @Test("A chunk takes its length from the back and its bytes from the front")
-    func chunkSplitsEnds() {
-        // Length byte 0x03 is at the back; the three bytes come off the front.
-        let chunk = withProvider([1, 2, 3, 4, 5, 0x03]) { $0.chunk() }
-        #expect(chunk == [1, 2, 3])
+    @Test("A chunk takes its bytes from the front")
+    func chunkTakesFromFront() {
+        let input: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
+        let chunk = withProvider(input) { $0.chunk() }
+        #expect(chunk == Array(input.prefix(chunk.count)))
     }
 
-    @Test("Several chunks come out in order without overlapping")
-    func severalChunks() {
-        // Lengths 2 then 3, read from the back in that order.
-        let (first, second) = withProvider([1, 2, 3, 4, 5, 0x03, 0x02]) { data in
-            (data.chunk(), data.chunk())
-        }
-        #expect(first == [1, 2])
-        #expect(second == [3, 4, 5])
+    @Test("A chunk takes its length from the back, not the front")
+    func lengthComesFromTheBack() {
+        // Varying the back changes how much is taken...
+        let varyingBack = Set((0..<32).map { back in
+            withProvider([1, 2, 3, 4, 5, 6, 7, 8, UInt8(back)]) { $0.chunk() }.count
+        })
+        #expect(varyingBack.count > 1)
+
+        // ...while varying the front does not. That separation is what keeps a
+        // payload mutation from shifting every control value.
+        let varyingFront = Set((0..<32).map { front in
+            withProvider([UInt8(front), 2, 3, 4, 5, 6, 7, 8, 0x05]) { $0.chunk() }.count
+        })
+        #expect(varyingFront.count == 1)
     }
 
     @Test("A chunk is truncated rather than failing when the input is short")
     func chunkTruncates() {
         let chunk = withProvider([1, 2, 0xFF]) { $0.chunk() }
-        #expect(chunk == [1, 2])
+        #expect(chunk.count <= 3)
     }
 
     @Test("An exhausted provider yields an empty chunk")
@@ -154,22 +178,59 @@ struct ChunkTests {
         #expect(withProvider([]) { $0.chunk() }.isEmpty)
     }
 
+    // The bug this suite exists to prevent. A length drawn from a fixed 0...255
+    // exceeds what is left on almost every realistic input, so the first chunk
+    // took everything: a harness pulling three header values out of 46 bytes
+    // got 45, then nothing, then nothing, and silently fuzzed one field.
+    @Test("A chunk leaves data behind for the draws that follow")
+    func chunkDoesNotStarve() {
+        // Enumerated rather than sampled, so this cannot flake.
+        var leftSomething = 0
+        for back in UInt8.min...UInt8.max {
+            let input = Array(repeating: UInt8(0x41), count: 40) + [back]
+            let second = withProvider(input) { data in
+                _ = data.chunk()
+                return data.chunk()
+            }
+            if !second.isEmpty { leftSomething += 1 }
+        }
+        // The old fixed 0...255 bound took everything whenever the drawn length
+        // reached what was left, which for a 40-byte input is 216 of the 256
+        // possible draws. Drawing against what remains inverts that. It is not
+        // 256/256, and should not be: a draw that legitimately lands at the top
+        // still takes the lot.
+        #expect(leftSomething > 150, "only \(leftSomething)/256 inputs left data for a second chunk")
+    }
+
+    @Test("Several chunks come out in order without overlapping")
+    func severalChunks() {
+        let input: [UInt8] = Array(repeating: 0, count: 8).enumerated().map { UInt8($0.offset) }
+        let (first, second) = withProvider(input + [0x40, 0x21]) { data in
+            (data.chunk(), data.chunk())
+        }
+        // Consecutive slices of the front, in order, never overlapping.
+        #expect(first == Array(input.prefix(first.count)))
+        #expect(second == Array(input.dropFirst(first.count).prefix(second.count)))
+    }
+
     @Test("Text repairs invalid UTF-8 rather than failing")
     func textIsTotal() {
-        let text = withProvider([0xFF, 0x41, 0x02]) { $0.text() }
+        let input = inputYielding(chunk: [0xFF, 0x41])
+        let text = withProvider(input) { $0.text() }
         #expect(text.contains("A"))
     }
 
     @Test("optionalText distinguishes absent from empty")
     func optionalTextSeparatesAbsentFromEmpty() {
-        // An APIs where "no scheme" and "empty scheme" differ needs this.
-        #expect(withProvider([0x00]) { $0.optionalText() } == nil)
-        #expect(withProvider([0x41, 0x01]) { $0.optionalText() } == "A")
+        // An API where "no scheme" and "empty scheme" differ needs this.
+        #expect(withProvider(inputYielding(chunk: [])) { $0.optionalText() } == nil)
+        #expect(withProvider(inputYielding(chunk: [0x41])) { $0.optionalText() } == "A")
     }
 
-    @Test("remainingText takes everything left")
+    @Test("remainingText takes everything the chunk left")
     func remainingText() {
-        let (first, rest) = withProvider([0x41, 0x42, 0x43, 0x01]) { data in
+        let input = inputYielding(chunk: [0x41], followedBy: [0x42, 0x43])
+        let (first, rest) = withProvider(input) { data in
             (data.chunk(), data.remainingText())
         }
         #expect(first == [0x41])
@@ -220,8 +281,40 @@ struct FuzzableTests {
 
     @Test("Strings are repaired rather than rejected on invalid UTF-8")
     func stringsAreTotal() {
-        let text = withProvider([0xFF, 0xFE, 0x41]) { $0.value(String.self) }
+        let input = inputYielding(chunk: [0xFF, 0xFE, 0x41])
+        let text = withProvider(input) { $0.value(String.self) }
         #expect(text.contains("A"))
+    }
+
+    // A greedy String consumed the whole input, so every field declared after
+    // one got zeros forever and `[String]` was one element and then empties.
+    @Test("A String leaves data for the fields declared after it")
+    func stringComposes() {
+        struct Pair: Fuzzable {
+            var text: String
+            var number: Int
+            init(from provider: inout FuzzedDataProvider) {
+                text = provider.value()
+                number = provider.value()
+            }
+        }
+        var nonZero = 0
+        for back in UInt8.min...UInt8.max {
+            let input = Array("hello world, plenty of bytes here".utf8) + [back]
+            if withProvider(input, { $0.value(Pair.self) }).number != 0 { nonZero += 1 }
+        }
+        #expect(nonZero > 200, "only \(nonZero)/256 inputs left anything for the second field")
+    }
+
+    @Test("An array of strings spreads the input across its elements")
+    func arrayOfStringsComposes() {
+        var populated = 0
+        for back in UInt8.min...UInt8.max {
+            let input = Array("abcdefghijklmnopqrstuvwxyz".utf8) + [back]
+            let items = withProvider(input) { $0.value([String].self) }
+            if items.count(where: { !$0.isEmpty }) > 1 { populated += 1 }
+        }
+        #expect(populated > 128, "only \(populated)/256 inputs populated more than one element")
     }
 
     @Test("A custom Fuzzable composes from the provider")

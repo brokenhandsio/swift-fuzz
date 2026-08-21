@@ -298,9 +298,20 @@ FuzzTarget.structured("URIParse") { data in
 ```
 
 `text()`, `optionalText()` and `remainingText()` are the UTF-8 forms, repairing
-invalid sequences rather than failing. Chunks are bounded at 255 bytes, so one
-byte of input cannot claim the whole buffer and starve everything drawn after
-it.
+invalid sequences rather than failing.
+
+A chunk's length is drawn against **what is left**, not against a fixed ceiling,
+so each draw leaves something for the ones after it. That matters more than it
+sounds: a length drawn from a fixed `0...255` exceeds what remains on almost any
+realistic input, so the first draw takes everything and every later one comes
+back empty. A harness pulling three header values out of a 46-byte input got 45
+bytes, then nothing, then nothing — fuzzing one field and holding the other two
+constant, with no sign anything was wrong. Drawing against the remaining input
+hands the split back to the fuzzer, which is the point of keeping lengths at the
+back where coverage feedback can learn them.
+
+Use `remainingText()` or `remainingBytes()` for the last value a target draws,
+when it genuinely should take the rest.
 
 ### Fuzzable
 

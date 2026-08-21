@@ -6,11 +6,11 @@
 /// (`FuzzedDataProvider.h`) came from. This is the same idea in Swift.
 ///
 /// ```swift
-/// FuzzTarget("Decode", providing: { data in
+/// FuzzTarget.structured("Decode") { data in
 ///     let depth = data.integer(in: 1...64)
 ///     let strict = data.bool()
 ///     _ = try? MyParser.parse(data.remainingBytes(), maximumDepth: depth, strict: strict)
-/// })
+/// }
 /// ```
 ///
 /// ### Running out of data
@@ -112,10 +112,26 @@ public struct FuzzedDataProvider {
     /// so the payload stays contiguous and mutating it does not shift the
     /// values already drawn.
     ///
-    /// Bounded at 255 bytes per chunk, so a single byte of input cannot ask for
-    /// the whole buffer and starve everything drawn after it.
+    /// The length is drawn against what is left, not against a fixed ceiling.
+    ///
+    /// That distinction is the whole of it. A length drawn from `0...255`
+    /// sounds bounded, but on any input shorter than 255 bytes the drawn value
+    /// almost always exceeds what remains, so the first chunk takes everything
+    /// and every later draw returns empty. A harness pulling three header
+    /// values out of a 46-byte input got 45 bytes, then nothing, then nothing —
+    /// silently fuzzing one field and leaving the other two constant.
+    ///
+    /// Drawing against `remainingCount` hands the split back to the fuzzer.
+    /// The length is a control value at a stable offset, so coverage feedback
+    /// can learn to move it, which is exactly what the front/back split exists
+    /// for. There is no allocation risk in the wider bound either: the ceiling
+    /// is the input, and libFuzzer already bounds that with `-max_len`.
     public mutating func chunk() -> [UInt8] {
-        bytes(Int(integer(in: UInt8.min...UInt8.max)))
+        // Two bytes, whatever the input size, so the layout a fuzzer learns
+        // does not shift as the corpus grows. Inputs beyond 64KB cap here;
+        // `remainingBytes()` is the way to ask for the rest.
+        let limit = UInt16(clamping: remainingCount)
+        return bytes(Int(integer(in: 0...limit)))
     }
 
     /// Consumes a ``chunk()`` as UTF-8 text.

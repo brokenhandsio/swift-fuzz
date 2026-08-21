@@ -14,9 +14,9 @@
 ///     }
 /// }
 ///
-/// FuzzTarget("Router", providing: { data in
+/// FuzzTarget.structured("Router") { data in
 ///     _ = router.route(data.value(Request.self))
-/// })
+/// }
 /// ```
 ///
 /// ### Why this cannot fail
@@ -45,24 +45,39 @@ extension Bool: Fuzzable {
 }
 
 extension String: Fuzzable {
-    /// Consumes the remaining bytes, repairing invalid UTF-8.
+    /// Consumes a length-prefixed chunk as UTF-8 text, repairing invalid
+    /// sequences.
     ///
     /// Repairing rather than rejecting keeps the initialiser total, and the
     /// replacement characters are themselves worth testing — text handling
     /// frequently goes wrong on them.
+    ///
+    /// Bounded, not greedy. A `Fuzzable` value has to compose: a greedy string
+    /// consumes the whole input, so every field declared after one gets zeros
+    /// forever and `[String]` yields one populated element followed by empties.
+    /// The bound is ``FuzzedDataProvider/chunk()``'s, for the reason its own
+    /// documentation gives — one byte of input must not be able to starve
+    /// everything drawn after it.
+    ///
+    /// When a target genuinely wants the rest of the input as text, and it is
+    /// the last thing it draws, ask for that directly with
+    /// ``FuzzedDataProvider/remainingText()``.
     public init(from provider: inout FuzzedDataProvider) {
-        self = String(decoding: provider.remainingBytes(), as: UTF8.self)
+        self = provider.text()
     }
 }
 
 extension Array: Fuzzable where Element: Fuzzable {
     /// Consumes a length, then that many elements.
     ///
-    /// The length is bounded at 256 so a single byte of input cannot ask for an
-    /// enormous allocation — the fuzzer would otherwise spend its time on
-    /// out-of-memory reports rather than on the code under test.
+    /// The length is bounded twice: at 255, so a single byte of input cannot
+    /// ask for an enormous allocation — the fuzzer would otherwise spend its
+    /// time on out-of-memory reports rather than on the code under test — and
+    /// at what is left, so a short input cannot ask for two hundred elements it
+    /// has no bytes to fill.
     public init(from provider: inout FuzzedDataProvider) {
-        let count = Int(provider.integer(in: UInt8(0)...UInt8(255)))
+        let limit = UInt8(clamping: provider.remainingCount)
+        let count = Int(provider.integer(in: UInt8(0)...limit))
         var elements: [Element] = []
         elements.reserveCapacity(Swift.min(count, 64))
         for _ in 0..<count {
