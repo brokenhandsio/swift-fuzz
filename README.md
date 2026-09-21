@@ -493,8 +493,8 @@ corpus, which makes it read-only — discoveries are never written there.
 coverage. It grows on every run, including in CI.
 
 The split exists because minimizing conflates the two otherwise. `-merge=1`
-rewrites the directory it minimizes, keeping the smallest set that preserves
-coverage — and a hand-written vector whose coverage is reachable some other way
+reduces the inputs needed for the current build's observed features — and a
+hand-written vector whose coverage is reachable some other way
 is exactly what it deletes. swift-cbor lost all 69 of its RFC 8949 vectors that
 way before this separation existed. Specification vectors are documentation as
 much as coverage; a minimizer cannot know that.
@@ -519,13 +519,23 @@ Seeds/CBORDecode was not modified.
 68% fewer files, 74% fewer bytes, and edge coverage unchanged at 533.
 
 The merge runs over the seeds *and* the corpus, then drops any result that is
-byte-identical to a seed. So the corpus ends up holding only what the seeds do
-not already cover — minimizing the corpus in isolation would keep entries whose
-coverage a seed already provides. Seeds are an input to the merge and are never
-written.
+byte-identical to a seed. Seeds are an input to the merge and are never written.
+The merge uses the same runtime defaults as fuzzing, including value profiling;
+pass the same feature overrides if you changed them during the original run.
 
-If the merge produces nothing, the corpus is left alone: an empty result means
-the binary failed, not that every input was redundant.
+Before replacing the corpus, swift-fuzz replays the original and candidate with
+the same settings and refuses if the edge count decreases, or either
+measurement fails. Value-profile totals can vary even when removing exact
+copies of seeds, so selection of those features is left to libFuzzer's merge.
+The edge count is a regression check, not proof of identical feature sets
+across nondeterministic runs. Minimization is specific to the current build
+and settings, and does not promise the mathematically smallest corpus.
+
+An empty working corpus is valid when the seeds already retain the observed
+coverage. Replacement keeps the original in a sibling backup until installation
+succeeds and restores it on an installation error. If interruption or a second
+filesystem error prevents recovery, the `.NAME.swift-fuzz-backup` directory
+retains the original inputs; recover it before minimizing again.
 
 ### Minimizing a crash
 

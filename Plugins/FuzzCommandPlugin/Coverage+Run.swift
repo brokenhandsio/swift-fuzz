@@ -37,13 +37,9 @@ extension Coverage {
             throw FuzzError(missingSymbolizerMessage(target: layout.target))
         }
 
-        var arguments = [
+        var arguments = FuzzerArguments.defaults(layout: layout) + [
             "-runs=0",
             "-print_coverage=1",
-            "-detect_leaks=0",
-            // A corpus input that crashes should still be saved rather than
-            // just aborting the report.
-            "-artifact_prefix=\(layout.crashes.path)/",
         ]
         arguments += passthrough
         arguments += layout.inputDirectories

@@ -9,7 +9,7 @@ struct Arguments {
         case replay
         /// Run a single saved input, usually a crash artefact.
         case reproduce(String)
-        /// Shrink the corpus to the smallest set with the same coverage.
+        /// Reduce the corpus using the current build's observed features.
         case minimizeCorpus
         /// Shrink one crashing input to the smallest input that still crashes.
         case minimizeCrash(String)
@@ -109,8 +109,8 @@ struct Arguments {
                                Include dependency source files in the coverage
                                report. By default it covers only the package
                                under test.
-          --minimize-corpus    Shrink the corpus to the smallest set with the same
-                               coverage. Seeds are never modified.
+          --minimize-corpus    Reduce the corpus using this build's observed
+                               features. Seeds are never modified.
           --minimize-crash <path>
                                Shrink one crashing input in place to the smallest
                                input that still crashes.

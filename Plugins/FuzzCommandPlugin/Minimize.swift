@@ -9,69 +9,64 @@ enum Minimize {
         let bytesAfter: Int
     }
 
-    /// Replaces the corpus with the smallest set of inputs that preserves its
-    /// coverage.
-    ///
-    /// The merge runs over the seeds *and* the corpus together, then drops any
-    /// result that is byte-identical to a seed. That yields a corpus holding
-    /// only what the seeds do not already cover — minimizing the corpus alone
-    /// would leave entries whose coverage a seed already provides.
-    ///
-    /// Seeds themselves are never written: they are an input to the merge and
-    /// nothing more.
+    /// Reduces the corpus using the same observed features as normal fuzzing.
+    /// Seeds are read-only. A successful merge may leave an empty working
+    /// corpus when the seeds already contain all the necessary inputs.
     static func run(
-        binary: URL, layout: Layout, symbolizer: URL?, workDirectory: URL
+        binary: URL, layout: Layout, symbolizer: URL?, passthrough: [String] = []
     ) throws -> Result {
+        try InputReplacement.requireNoBackup(for: layout.corpus)
         let before = try measure(layout.corpus)
         guard before.files > 0 else {
             throw FuzzError("Corpus/\(layout.target) is empty; nothing to minimize.")
         }
 
-        let staging = workDirectory.appending(path: "minimize-\(layout.target)")
-        try? FileManager.default.removeItem(at: staging)
-        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: staging) }
+        // User feature settings apply to both the merge and its verification.
+        // The operation flags follow them so verification always replays and
+        // the merge always writes to our staging directory.
+        let arguments = FuzzerArguments.defaults(layout: layout) + passthrough
+        let originalCoverage = try coverage(
+            binary: binary, layout: layout, symbolizer: symbolizer,
+            arguments: arguments, directories: layout.inputDirectories)
 
-        // -merge=1 <dest> <sources...>: dest collects the minimal set.
-        var arguments = ["-merge=1", staging.path]
-        if layout.hasSeeds { arguments.append(layout.seeds.path) }
-        arguments.append(layout.corpus.path)
+        let staging = try InputReplacement.stagingDirectory(for: layout.corpus)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        var mergeArguments = arguments + ["-minimize_crash=0", "-merge=1", staging.path]
+        if layout.hasSeeds { mergeArguments.append(layout.seeds.path) }
+        mergeArguments.append(layout.corpus.path)
 
         let status = try Process.stream(
-            binary, arguments,
+            binary, mergeArguments,
             environment: FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer),
-            currentDirectory: layout.packageDirectory
-        )
+            currentDirectory: layout.packageDirectory)
         guard status == 0 else {
             throw FuzzError("libFuzzer's merge exited with status \(status); the corpus is unchanged.")
         }
 
-        let seedContents = try seedContents(layout: layout)
-        var keep: [URL] = []
-        for file in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
-            let data = try Data(contentsOf: file)
-            // Anything the seeds already carry belongs in Seeds/, not here.
-            if seedContents.contains(data) { continue }
-            keep.append(file)
+        let seeds = try seedContents(layout: layout)
+        for file in try regularFiles(in: staging) {
+            if seeds.contains(try Data(contentsOf: file)) {
+                try FileManager.default.removeItem(at: file)
+            }
         }
 
-        // A merge that produced nothing almost certainly means the binary failed
-        // rather than that the corpus was redundant. Refuse rather than delete.
-        guard !keep.isEmpty else {
+        // Check the exact candidate we intend to install, including seeds that
+        // remain outside it. Counts catch observed regressions, but cannot
+        // prove equality of feature identities across nondeterministic runs.
+        let candidateCoverage = try coverage(
+            binary: binary, layout: layout, symbolizer: symbolizer,
+            arguments: arguments,
+            directories: layout.hasSeeds ? [staging.path, layout.seeds.path] : [staging.path])
+        guard !Coverage.lostCoverage(before: originalCoverage, after: candidateCoverage) else {
             throw FuzzError("""
-                The merge produced no inputs, which should not happen for a non-empty corpus.
-                Leaving Corpus/\(layout.target) untouched.
+                Minimizing would lose observed coverage: \(originalCoverage) edges before, \(candidateCoverage) after.
+                Corpus/\(layout.target) is unchanged.
+                Check that the harness behaves deterministically for each input.
                 """)
         }
 
-        // Replace only once the new set is known-good.
-        try FileManager.default.removeItem(at: layout.corpus)
-        try FileManager.default.createDirectory(at: layout.corpus, withIntermediateDirectories: true)
-        for file in keep {
-            try FileManager.default.moveItem(at: file, to: layout.corpus.appending(path: file.lastPathComponent))
-        }
-
-        let after = try measure(layout.corpus)
+        let after = try measure(staging)
+        try InputReplacement.replace(layout.corpus, with: staging)
         return Result(filesBefore: before.files, bytesBefore: before.bytes,
                       filesAfter: after.files, bytesAfter: after.bytes)
     }
@@ -86,25 +81,27 @@ enum Minimize {
     /// version control.
     static func crash(
         binary: URL, layout: Layout, path: String, symbolizer: URL?,
-        workDirectory: URL, passthrough: [String]
+        passthrough: [String]
     ) throws -> Result {
         let input = URL(fileURLWithPath: path, relativeTo: layout.packageDirectory)
+        try InputReplacement.requireNoBackup(for: input)
         guard FileManager.default.fileExists(atPath: input.path) else {
             throw FuzzError("No such input: \(path)")
         }
         let before = (try Data(contentsOf: input)).count
 
-        let staging = workDirectory.appending(path: "minimized-\(input.lastPathComponent)")
-        try? FileManager.default.removeItem(at: staging)
+        let directory = try InputReplacement.stagingDirectory(for: input)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let staging = directory.appending(path: "input")
 
-        var arguments = ["-minimize_crash=1", "-exact_artifact_path=\(staging.path)"]
+        var arguments = FuzzerArguments.defaults(layout: layout)
         // Bounded so a stubborn input cannot run forever; overridable by passing
         // your own -runs=.
         if !passthrough.contains(where: { $0.hasPrefix("-runs=") }) {
             arguments.append("-runs=100000")
         }
         arguments += passthrough
-        arguments.append(input.path)
+        arguments += ["-minimize_crash=1", "-exact_artifact_path=\(staging.path)", input.path]
 
         let status = try Process.stream(
             binary, arguments,
@@ -113,35 +110,59 @@ enum Minimize {
         )
 
         guard FileManager.default.fileExists(atPath: staging.path) else {
-            // No output means libFuzzer never reproduced the crash at all.
             throw FuzzError("""
-                \(path) did not crash, so there was nothing to minimize (exit \(status)).
-                Check it is a crashing input, and that this target is the one that produced it.
+                No minimized input was produced for \(path) (exit \(status)); the original is unchanged.
+                Check that the input reproduces with this target and review libFuzzer's output.
                 """)
         }
         let after = (try Data(contentsOf: staging)).count
 
-        // Replace in place: the smaller input supersedes the original as a
-        // regression test, and keeping both would mean replaying the same bug
-        // twice on every run.
-        try FileManager.default.removeItem(at: input)
-        try FileManager.default.moveItem(at: staging, to: input)
+        guard after <= before else {
+            throw FuzzError("Minimization produced a larger input; \(path) is unchanged.")
+        }
+        try InputReplacement.replace(input, with: staging)
 
         return Result(filesBefore: 1, bytesBefore: before, filesAfter: 1, bytesAfter: after)
     }
 
+    private static func coverage(
+        binary: URL, layout: Layout, symbolizer: URL?, arguments: [String], directories: [String]
+    ) throws -> Int {
+        let (status, diagnostics) = try Process.captureDiagnostics(
+            binary, arguments + ["-merge=0", "-minimize_crash=0", "-runs=0"] + directories,
+            environment: FuzzEnvironment.make(target: layout.target, symbolizer: symbolizer),
+            currentDirectory: layout.packageDirectory)
+        guard status == 0,
+              let edges = Coverage.edgeCount(in: diagnostics) else {
+            throw FuzzError("Could not verify corpus coverage (exit \(status)); Corpus/\(layout.target) is unchanged.")
+        }
+        return edges
+    }
+
     private static func seedContents(layout: Layout) throws -> Set<Data> {
         guard layout.hasSeeds else { return [] }
-        let files = try FileManager.default.contentsOfDirectory(at: layout.seeds, includingPropertiesForKeys: nil)
-        return Set(files.compactMap { try? Data(contentsOf: $0) })
+        return try Set(regularFiles(in: layout.seeds).map { try Data(contentsOf: $0) })
+    }
+
+    private static func regularFiles(in directory: URL) throws -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            throw FuzzError("Could not read inputs in \(directory.path).")
+        }
+        var files: [URL] = []
+        for case let file as URL in enumerator {
+            if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                files.append(file)
+            }
+        }
+        return files
     }
 
     private static func measure(_ directory: URL) throws -> (files: Int, bytes: Int) {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-        let files = contents.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
-        let bytes = files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+        let files = try regularFiles(in: directory)
+        let bytes = try files.reduce(0) { total, file in
+            total + (try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
         return (files.count, bytes)
     }
-
 }

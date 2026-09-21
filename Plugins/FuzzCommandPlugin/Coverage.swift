@@ -144,6 +144,35 @@ enum Coverage {
         }
     }
 
+    /// The edge count libFuzzer reports on its own status lines.
+    ///
+    /// Deliberately not `-print_coverage`. That needs a symbolizer, which
+    /// SwiftPM's macOS plugin sandbox will not let the sanitizer runtime
+    /// launch — so a minimize that verified itself that way would start
+    /// demanding `--disable-sandbox`. `cov:` appears on every `INITED`/`DONE`
+    /// line and needs nothing. This is a count, not a set of edge identities;
+    /// an unchanged count alone cannot prove identical coverage.
+    ///
+    /// Takes the last occurrence, which is the `DONE` line.
+    static func edgeCount(in diagnostics: some StringProtocol) -> Int? {
+        var result: Int?
+        for line in diagnostics.split(separator: "\n") {
+            guard let range = line.range(of: "cov: ") else { continue }
+            let digits = line[range.upperBound...].prefix { $0.isNumber }
+            if let value = Int(digits) { result = value }
+        }
+        return result
+    }
+
+    /// Whether a minimized corpus reaches less than the one it replaces.
+    ///
+    /// Missing counts are not evidence of loss. Callers must reject an
+    /// unavailable measurement separately before replacing any inputs.
+    static func lostCoverage(before: Int?, after: Int?) -> Bool {
+        guard let before, let after else { return false }
+        return after < before
+    }
+
     // MARK: - Rolling up
 
     /// The result of rolling up a run: the files a report is about, and what

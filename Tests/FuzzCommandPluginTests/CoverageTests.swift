@@ -239,6 +239,59 @@ struct CoverageTests {
         #expect(Coverage.percentage(0, of: 0) == "-")
     }
 
+    // MARK: Edge count
+
+    @Test("The edge count comes off libFuzzer's own status line")
+    func edgeCount() {
+        let output = """
+            #2611	INITED cov: 521 ft: 2900 corp: 710/60Kb exec/s: 0 rss: 125Mb
+            #2611	DONE   cov: 989 ft: 7699 corp: 988/377Kb lim: 3982 exec/s: 804
+            """
+        // The last one, which is DONE — INITED reports only the seeds.
+        #expect(Coverage.edgeCount(in: output) == 989)
+    }
+
+    @Test("A single status line is enough")
+    func edgeCountSingleLine() {
+        #expect(Coverage.edgeCount(in: "#5\tINITED cov: 42 ft: 100 corp: 1/1b") == 42)
+    }
+
+    @Test("Output with no coverage line yields nil rather than zero")
+    func edgeCountAbsent() {
+        // Nil and zero must not be confused: zero would read as "lost all
+        // coverage" and make minimize refuse when the check simply failed.
+        #expect(Coverage.edgeCount(in: "Building for debugging...\nBuild complete!") == nil)
+        #expect(Coverage.edgeCount(in: "") == nil)
+    }
+
+    @Test("A zero count is read as zero, not as absent")
+    func edgeCountZero() {
+        #expect(Coverage.edgeCount(in: "#1\tDONE cov: 0 ft: 0") == 0)
+    }
+
+    @Test("A minimized corpus reaching fewer edges is a loss")
+    func lostCoverage() {
+        #expect(Coverage.lostCoverage(before: 218, after: 217))
+        #expect(Coverage.lostCoverage(before: 428, after: 426))
+    }
+
+    @Test("Reaching the same or more is not a loss")
+    func noLoss() {
+        #expect(!Coverage.lostCoverage(before: 218, after: 218))
+        // Merging can legitimately reach *more*: the corpus is replayed in one
+        // process rather than accumulated across many.
+        #expect(!Coverage.lostCoverage(before: 218, after: 219))
+    }
+
+    // Missing data is not evidence of a loss. The minimizer rejects failed or
+    // incomplete measurements separately before comparing valid counts.
+    @Test("An unmeasurable side is not a loss", arguments: [
+        (nil, 217), (218, nil), (nil, nil),
+    ] as [(Int?, Int?)])
+    func unmeasurable(pair: (Int?, Int?)) {
+        #expect(!Coverage.lostCoverage(before: pair.0, after: pair.1))
+    }
+
     // MARK: Demangling
 
     @Test("Swift's mangling prefixes are recognised",
