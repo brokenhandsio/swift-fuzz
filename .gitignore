@@ -6,8 +6,8 @@
 # the file appears and disappears depending on whether docs were last built.
 /Package.resolved
 
-# Example corpora and crash artefacts are regenerated on every run and carry no
-# value between them. A real consumer commits both — see "Corpus hygiene".
+# The examples intentionally rediscover a planted bug. Consumers can ignore
+# working corpora too, but should preserve real discoveries and regression inputs.
 Examples/**/Corpus/
 Examples/**/Crashes/
 

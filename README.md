@@ -57,11 +57,12 @@ import PackageDescription
 
 let package = Package(
     name: "Fuzzing",
+    platforms: [.macOS(.v26)],
     dependencies: [
         // Your library, and swift-fuzz. Note the `package:` label for a path
         // dependency is the *directory* name, not the name in its manifest.
         .package(path: "../"),
-        .package(url: "https://github.com/brokenhandsio/swift-fuzz.git", from: "0.1.0"),
+        .package(url: "https://github.com/brokenhandsio/swift-fuzz.git", from: "0.4.1"),
     ],
     targets: []
 )
@@ -122,11 +123,12 @@ compiler emits, so it cannot be vendored or installed separately.
   one from swift.org (`swiftly install 6.3.3`) and select it with
   `export TOOLCHAINS=org.swift.<identifier>` or `xcrun --toolchain swift`.
 
-swift-fuzz requires **Swift 6.3 or later** — its manifest is
+swift-fuzz requires **Swift 6.3 or later**, and **macOS 26 or later** when
+running on macOS. The nested fuzzing package must declare that macOS minimum,
+as in the manifest above; the library under test can retain its own lower
+deployment target. swift-fuzz's manifest is
 `swift-tools-version: 6.3`, needed for `.strictMemorySafety()`. Verified end to
-end on 6.3.3 and 6.4. (The runtime works as far back as 6.0, so if you need an
-older toolchain the only blocker is the manifest.) Only the standalone target
-shape needs 6.4.
+end on 6.3.3 and 6.4. Only the standalone target shape needs 6.4.
 
 Before building anything, `swift package fuzz` compiles and links a five-line
 probe to check the toolchain can actually produce a fuzz binary. If it cannot,
@@ -152,7 +154,7 @@ YourRepo/
 └── Fuzzing/
     ├── Package.swift                ← root package when fuzzing
     ├── Seeds/<Target>/              ← optional; hand-written, never written to
-    ├── Corpus/<Target>/             ← committed; see Corpus hygiene below
+    ├── Corpus/<Target>/             ← working corpus; can be gitignored
     ├── Crashes/<Target>/            ← crashing inputs land here
     ├── Dictionaries/<Target>.dict   ← optional, picked up automatically
     └── FuzzTargets/<Target>/…
@@ -428,8 +430,7 @@ swift package --allow-writing-to-package-directory fuzz <target> [options]
   --uncovered          As --coverage, plus every function it never reached.
   --reproduce <path>   Run one saved input, usually a crash artefact.
   --minimize-crash <path>
-                       Shrink a crashing input, in place, to the smallest input
-                       that still crashes.
+                       Shrink a crashing input in place while keeping it crashing.
   --release            Build in release configuration.
   --sanitizers <list>  Default: fuzzer,address. --no-asan for fuzzer only.
 ```
@@ -438,8 +439,8 @@ Any other `-flag` goes straight to libFuzzer, so `-max_len=64`,
 `-rss_limit_mb=4096`, `-dict=...` and `-minimize_crash=1` all work.
 
 A crash exits non-zero and prints the artefact path plus a copy-pasteable
-`--reproduce` command. `--replay` over a committed corpus is the CI regression
-mode.
+`--reproduce` command. `--replay` over seeds and saved regression inputs is the
+CI regression mode; it includes the working corpus when present.
 
 ## Strict memory safety
 
@@ -490,7 +491,7 @@ you wrote or curated deliberately. swift-fuzz passes it to libFuzzer *after* the
 corpus, which makes it read-only — discoveries are never written there.
 
 `Corpus/<Target>/` is libFuzzer's: every input it has found that reached new
-coverage. It grows on every run, including in CI.
+coverage. It grows during fuzzing, including in CI.
 
 The split exists because minimizing conflates the two otherwise. `-merge=1`
 reduces the inputs needed for the current build's observed features — and a
@@ -501,9 +502,9 @@ much as coverage; a minimizer cannot know that.
 
 ### Minimizing
 
-The corpus is worth committing: on swift-cbor the seeds alone reach 341 coverage
-edges and seeds plus corpus reach 533. But libFuzzer keeps every input that adds
-a feature, so most of the directory is redundant:
+Minimization reduces storage and replay time, whether the working corpus is
+committed or gitignored. libFuzzer keeps every input that adds a feature during
+the search, and many of those inputs become redundant:
 
 ```bash
 swift package --allow-writing-to-package-directory fuzz MyTarget --minimize-corpus
@@ -560,24 +561,36 @@ It rewrites the file in place, because the smaller input supersedes the original
 as a regression test and keeping both would replay the same bug twice on every
 run. libFuzzer only keeps inputs that still crash, so the result is crashing by
 construction — though it does not check the crash is the *same* one. If a
-minimized artefact stops looking like the bug you were chasing, the original is
-in version control.
+minimized artefact stops looking like the bug you were chasing, restore your
+saved original. Commit or copy an important reproducer before minimizing it;
+the replacement backup protects against installation failures and is removed
+after a successful replacement.
 
 ### What to commit, what to ignore
 
-Commit `Seeds/`, `Corpus/`, `Crashes/` and `Dictionaries/`. Crash artefacts are
-regression tests — `--replay` re-runs them.
+Commit curated `Seeds/`, `Dictionaries/`, and crash inputs once their bugs are
+fixed. Preserve new findings separately until then. `--replay` re-runs saved
+crash inputs alongside the seeds and any working corpus.
 
-It is tempting to gitignore `Corpus/` to stop runs dirtying the tree, but it
-carries real value: on swift-cbor the seeds alone reach 341 coverage edges and
-seeds plus corpus reach 533. Ignoring it would throw away 56% of the coverage
-your replay gate exercises, and every clone would start from cold. The churn is
-the price; minimize before committing.
+`Corpus/` can be entirely gitignored. swift-fuzz creates missing working
+directories and starts from the seeds; `--minimize-corpus` also works on ignored
+files. On a fresh clone with an empty working corpus, there is nothing to
+minimize yet.
+
+Ignoring the corpus does not delete local progress. Discarding it does: a later
+run may recover similar coverage, but extra runtime cannot guarantee the same
+inputs or paths. A fresh clone's replay checks only committed inputs. Promote
+important discoveries to seeds or regression tests, and keep the larger working
+corpus locally or in CI storage if you want to retain search progress. Keeping
+a minimized corpus in Git remains an option.
 
 A `Fuzzing/.gitignore` worth copying:
 
 ```gitignore
 .build/
+
+# Accumulated search inputs; keep curated seeds and regression inputs in Git.
+/Corpus/
 
 # libFuzzer's per-worker logs, written by --jobs.
 /fuzz-*.log
@@ -589,6 +602,10 @@ A `Fuzzing/.gitignore` worth copying:
 /timeout-*
 /oom-*
 ```
+
+For an already tracked corpus, run `git rm -r --cached -- Corpus` from
+`Fuzzing/` after adding the ignore rule. This removes it from the index while
+retaining local files; review and commit that change.
 
 **The leading slashes are load-bearing.** An unanchored `crash-*` matches at any
 depth, so it would also hide new artefacts inside `Crashes/` — the single most
@@ -761,10 +778,11 @@ Two constraints worth knowing before you plan a submission:
 
 Fuzzing splits into two CI jobs with different jobs to do.
 
-**Replay — on every push and pull request.** `--replay` runs the seeds, the
-committed corpus and every saved crash artefact once each (`-runs=0`) and exits non-zero
-if any of them still crashes. It is a regression test, not a search: it finishes
-in seconds and never mutates anything, so it belongs on the critical path.
+**Replay — on every push and pull request.** `--replay` runs the seeds, any
+available working corpus and every saved crash artefact (`-runs=0`) and exits non-zero
+if any of them still crashes. It performs no mutation-based search and usually
+finishes in seconds, so it belongs on the critical path. It can still save crash
+artifacts when an input fails.
 
 ```yaml
 - name: Replay corpus
@@ -786,10 +804,21 @@ Nightly is a good default; it is the job that finds things.
   with:
     name: crashes-MyTarget
     path: Fuzzing/Crashes/MyTarget/
+
+- name: Preserve the working corpus
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: corpus-MyTarget
+    path: Fuzzing/Corpus/MyTarget/
+    if-no-files-found: ignore
 ```
 
 Upload on `failure()` matters: the artefact is the only way to reproduce what
-the runner found, and the container is gone once the job ends.
+the runner found, and the container is gone once the job ends. Preserve the
+working corpus on successful runs and finding failures, then restore a previous
+snapshot before the next soak. A CI cache can speed that up, but important
+inputs need durable storage beyond a cache or expiring workflow artifact.
 
 ### Things that will bite you
 
@@ -805,9 +834,9 @@ time from a single input. Check a candidate artefact by running it twenty times
 before you rely on it as a gate; if it is intermittent, say so where you commit
 it.
 
-**The corpus grows on every run**, including in CI. A soak job's working corpus
-is worth keeping — upload it as an artefact and merge it locally — but do not
-commit it straight from CI without minimizing first. See Corpus hygiene above.
+**The corpus grows during fuzzing**, including in CI. Minimize it to reduce
+storage and replay time. Keep corpus snapshots separate for each target and
+refresh them deliberately when the harness's input decoding changes.
 
 **Give the soak a `timeout-minutes`** comfortably above `--time`, and set
 `fail-fast: false` on the matrix so one target crashing does not cancel the
@@ -845,6 +874,11 @@ Swift 6.3 and 6.4, and asserts that the standalone shape refuses cleanly on
 6.3.x. The example jobs check three things a passing exit code would hide: that
 the planted bug was actually found, that the crash propagated a non-zero status,
 and that an artefact was written — without which `--reproduce` is impossible.
+
+It also builds the actual getting-started snippets, exercises asynchronous
+targets and their timeout behavior in release builds, replays saved crash
+inputs, and minimizes a padded crash. The macOS fuzz job installs a swift.org
+toolchain; the unit-test job continues to check Xcode's toolchain.
 
 Documentation is a DocC archive, behind an environment gate so consumers never
 resolve the plugin:

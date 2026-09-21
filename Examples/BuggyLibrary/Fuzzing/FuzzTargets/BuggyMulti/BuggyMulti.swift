@@ -34,4 +34,16 @@ let fuzzTargets: @Sendable () -> Void = {
     FuzzTarget.async("Asynchronous") { bytes in
         try? await BuggyLibrary.parseAsync(bytes)
     }
+
+    FuzzTarget.structuredAsync("StructuredAsynchronous") { data in
+        var data = data
+        try? await BuggyLibrary.parseAsync(data.remainingBytes())
+    }
+
+    // A bounded stall used by CI with FUZZ_ASYNC_TIMEOUT=1. Empty inputs
+    // return normally so the saved artifact is the nonempty seed.
+    FuzzTarget.async("AsyncTimeout") { bytes in
+        guard !bytes.isEmpty else { return }
+        try? await Task.sleep(for: .seconds(2))
+    }
 }

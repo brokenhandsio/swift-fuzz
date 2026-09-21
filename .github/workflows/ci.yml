@@ -37,6 +37,8 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
+      - name: Build the README getting-started example
+        run: swift Scripts/check-readme.swift
 
   # Each example is fuzzed for real and asserted on. These are the claims the
   # README makes, so they are the ones worth pinning.
@@ -66,10 +68,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Record seed count
-        id: seeds
+      - name: Snapshot seeds
         working-directory: ${{ matrix.path }}
-        run: echo "count=$(find Seeds/BuggyParse -type f | wc -l)" >> "$GITHUB_OUTPUT"
+        run: cp -R Seeds seeds-before
 
       - name: Fuzz the planted bug
         working-directory: ${{ matrix.path }}
@@ -102,17 +103,11 @@ jobs:
       # Seeds/ and minimization can delete curated inputs.
       - name: Seeds must be untouched
         working-directory: ${{ matrix.path }}
-        run: |
-          after=$(find Seeds/BuggyParse -type f | wc -l)
-          before=${{ steps.seeds.outputs.count }}
-          if [ "$after" -ne "$before" ]; then
-            echo "::error::Seeds/ changed during a run: $before -> $after"
-            exit 1
-          fi
-          if [ -z "$(ls -A Corpus/BuggyParse 2>/dev/null)" ]; then
-            echo "::error::no discoveries were written to Corpus/"
-            exit 1
-          fi
+        run: diff -r seeds-before Seeds
+
+      - name: Replay, crash minimization, and asynchronous release targets
+        working-directory: ${{ matrix.path }}
+        run: bash "$GITHUB_WORKSPACE/Scripts/check-runtime.sh" "${{ matrix.shape }}"
 
       # Minimization must shrink the corpus without touching seeds. Getting
       # this wrong deletes curated inputs, which is the failure the Seeds/
@@ -120,23 +115,19 @@ jobs:
       - name: Minimize the corpus
         working-directory: ${{ matrix.path }}
         run: |
+          # A planted crash may be found before any non-crashing discovery is
+          # saved. Supply known redundant inputs independently of that search.
+          cp Seeds/BuggyParse/* Corpus/BuggyParse/
           before=$(find Corpus/BuggyParse -type f | wc -l)
           swift package --allow-writing-to-package-directory fuzz BuggyParse --minimize-corpus
           after=$(find Corpus/BuggyParse -type f | wc -l)
-          seeds=$(find Seeds/BuggyParse -type f | wc -l)
-          echo "corpus $before -> $after, seeds $seeds"
+          echo "corpus $before -> $after"
           if [ "$after" -gt "$before" ]; then
             echo "::error::minimizing grew the corpus"
             exit 1
           fi
-          if [ "$after" -eq 0 ]; then
-            echo "::error::minimizing emptied the corpus"
-            exit 1
-          fi
-          if [ "$seeds" -ne "${{ steps.seeds.outputs.count }}" ]; then
-            echo "::error::minimizing modified Seeds/"
-            exit 1
-          fi
+          # Empty is valid when the seeds already retain the coverage.
+          diff -r seeds-before Seeds
 
       # Coverage is a diagnostic, so an empty or mangled report is a silent
       # failure rather than a loud one. Assert it actually resolved symbols.
@@ -220,8 +211,48 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-log-${{ matrix.shape }}-${{ matrix.swift }}
-          path: ${{ matrix.path }}/fuzz.log
+          path: ${{ matrix.path }}/*.log
           if-no-files-found: ignore
+
+  macos-fuzz:
+    name: macOS fuzzing with a swift.org toolchain
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3.3"
+      - name: Build and replay the README getting-started example
+        run: swift Scripts/check-readme.swift --run
+      - name: Replay and save the planted crash
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          mkdir -p Corpus/BuggyParse
+          printf FUZZ > Corpus/BuggyParse/mac-probe
+          if swift package --disable-sandbox --allow-writing-to-package-directory \
+              fuzz BuggyParse --replay > fuzz.log 2>&1; then
+            echo "::error::expected the planted crash"
+            exit 1
+          fi
+          grep -q "Fatal error: planted bug" fuzz.log
+          test -n "$(find Crashes/BuggyParse -type f -name 'crash-*' -print -quit)"
+          rm Corpus/BuggyParse/mac-probe
+      - name: Check runtime behavior
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: bash "$GITHUB_WORKSPACE/Scripts/check-runtime.sh" Paired
+      - name: Symbolized coverage from seeds
+        working-directory: Examples/BuggyLibrary/Fuzzing
+        run: |
+          swift package --disable-sandbox --allow-writing-to-package-directory \
+            fuzz BuggyParse --coverage > coverage.log 2>&1
+          grep -q "BuggyLibrary.swift" coverage.log
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-fuzz-logs
+          path: Examples/BuggyLibrary/Fuzzing/*.log
 
   # The standalone shape cannot work on 6.3.x. It must say so, rather than
   # failing with an undefined-symbol link error nobody can act on.
@@ -310,8 +341,6 @@ jobs:
           test -d Seeds/Scaffolded
           grep -q "ScaffoldedTarget" init.log
 
-      # The stub is written to compile and run untouched, so a new target can be
-      # exercised before the harness is filled in.
       # The stub is written to compile and run untouched, so a new target can
       # be exercised before the harness is filled in.
       - name: The untouched stub must build and run
