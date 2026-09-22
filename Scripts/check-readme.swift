@@ -26,8 +26,9 @@ let blocks = fences.matches(in: readme, range: NSRange(readme.startIndex..., in:
     String(readme[Range($0.range(at: 1), in: readme)!])
 }
 guard var manifest = blocks.first(where: { $0.hasPrefix("// swift-tools-version:") }),
-      let targets = blocks.first(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("targets: [") })
-else { throw CheckFailure(description: "could not locate the README's manifest and targets") }
+      let targets = blocks.first(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("targets: [") }),
+      let harness = blocks.first(where: { $0.contains("let fuzzTargets:") })
+else { throw CheckFailure(description: "could not locate the README's manifest, targets and harness") }
 
 // Test the current source without waiting for the next release to exist.
 let dependency = try NSRegularExpression(
@@ -65,6 +66,7 @@ var packageOptions = ["package", "--allow-writing-to-package-directory"]
 packageOptions.insert("--disable-sandbox", at: 1)
 #endif
 try run(packageOptions + ["fuzz-init", "JSONParsing"], in: fuzzing)
+try harness.write(to: fuzzing.appendingPathComponent("FuzzTargets/JSONParsing/JSONParsing.swift"), atomically: true, encoding: .utf8)
 try require(manifest.contains("targets: []"), "README's initial manifest should have no targets")
 try manifest.replacingOccurrences(of: "targets: []", with: targets.trimmingCharacters(in: .whitespacesAndNewlines))
     .write(to: package, atomically: true, encoding: .utf8)
