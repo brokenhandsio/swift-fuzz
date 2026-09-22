@@ -301,7 +301,16 @@ FuzzTarget.structured("URIParse") { data in
 ```
 
 `text()`, `optionalText()` and `remainingText()` are the UTF-8 forms, repairing
-invalid sequences rather than failing.
+invalid sequences rather than failing. `optionalText()` first consumes a byte
+from the back: an odd value means present and an even value means absent. A
+present value is then drawn with `text()`, so `nil`, `""` and nonempty strings
+are all reachable. It decodes identically to `value(String?.self)`.
+
+`element(of:)` and `caseOf()` use compact indices: no bytes for zero or one
+choice, one byte for 2...256 choices, two for 257...65,536, and so on. The bytes
+come from the back and the index is reduced modulo the number of choices.
+`integer(in:)` still consumes the integer type's full width, except for a
+single-value range.
 
 A chunk's length is drawn against **what is left**, not against a fixed ceiling,
 so each draw leaves something for the ones after it. That matters more than it
@@ -342,9 +351,27 @@ in a fixed order and do not branch on how much is left, so that the same bytes
 always produce the same value and a saved crashing input still reproduces.
 
 Conformances ship for the integers, `Bool`, `Double`, `Float`, `String`,
-`Optional` and `Array`. `Array` bounds its length at 256 — otherwise one byte of
+`Optional` and `Array`. `Array` bounds its length at 255 — otherwise one byte of
 input can ask for an enormous allocation, and the fuzzer spends its time on
 out-of-memory reports instead of on your code.
+
+### Saved input compatibility
+
+During 1.x, the provider preserves decoded values and byte consumption for the
+same input, operation sequence and arguments. Keep collection ordering, integer
+widths and custom `Fuzzable` implementations stable too; those are part of the
+harness's input format.
+
+**Migrating from 0.4.x changes decoding.** Compact selection consumes fewer
+bytes, and `optionalText()` now consumes a presence flag before any text length.
+Existing seeds and crash inputs using those operations can therefore reach
+different code, including fields drawn later. Preserve the old harness and
+important reproductions before upgrading, verify regression inputs under the
+new decoder, and migrate fixtures or record the decoded values in ordinary
+regression tests. Minimizing an old corpus does not translate its input format.
+
+See [Input compatibility](Sources/Fuzzing/Fuzzing.docc/InputCompatibility.md)
+for the byte rules, literal examples and migration guidance.
 
 ## Asynchronous targets
 

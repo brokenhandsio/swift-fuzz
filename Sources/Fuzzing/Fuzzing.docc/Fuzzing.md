@@ -84,3 +84,4 @@ hanging.
 
 - ``FuzzedDataProvider``
 - ``Fuzzable``
+- <doc:InputCompatibility>

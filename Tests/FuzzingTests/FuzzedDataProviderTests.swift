@@ -221,8 +221,9 @@ struct ChunkTests {
     @Test("optionalText distinguishes absent from empty")
     func optionalTextSeparatesAbsentFromEmpty() {
         // An API where "no scheme" and "empty scheme" differ needs this.
-        #expect(withProvider(inputYielding(chunk: [])) { $0.optionalText() } == nil)
-        #expect(withProvider(inputYielding(chunk: [0x41])) { $0.optionalText() } == "A")
+        #expect(withProvider([0]) { $0.optionalText() } == nil)
+        #expect(withProvider(inputYielding(chunk: []) + [1]) { $0.optionalText() } == "")
+        #expect(withProvider(inputYielding(chunk: [0x41]) + [1]) { $0.optionalText() } == "A")
     }
 
     @Test("remainingText takes everything the chunk left")

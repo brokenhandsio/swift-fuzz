@@ -31,6 +31,13 @@
 /// The provider owns its input and may outlive the fuzz body. Copies share
 /// immutable input storage, but consume bytes independently. For a borrowed,
 /// zero-copy input, use the `Span` form of ``FuzzTarget`` instead.
+///
+/// ### Input compatibility
+///
+/// During 1.x, the same bytes and sequence of operations preserve decoded
+/// values and consumption positions. This assumes the same integer widths,
+/// ranges, collection contents and order, and custom ``Fuzzable`` decoding.
+/// Changing a harness's decoding can change the meaning of its saved inputs.
 public struct FuzzedDataProvider: Sendable {
     private let storage: [UInt8]
     /// Next byte to hand out from the front.
@@ -109,14 +116,14 @@ public struct FuzzedDataProvider: Sendable {
         String(decoding: chunk(), as: UTF8.self)
     }
 
-    /// Consumes a ``chunk()`` as UTF-8 text, or `nil` if the chunk is empty.
+    /// Consumes a presence flag, then a ``text()`` value when present.
     ///
-    /// For APIs where absent and present-but-empty differ — a URL with no
-    /// scheme is not a URL whose scheme is `""` — so an empty chunk tests the
-    /// former rather than accidentally testing the latter.
+    /// An odd byte from the back means present; an even byte or exhausted
+    /// input means `nil`. Present text may be empty. This decodes identically
+    /// to `value(String?.self)` and distinguishes absent, empty and nonempty
+    /// values without consuming a text length when absent.
     public mutating func optionalText() -> String? {
-        let chunk = chunk()
-        return chunk.isEmpty ? nil : String(decoding: chunk, as: UTF8.self)
+        bool() ? text() : nil
     }
 
     /// Consumes everything that is left, as UTF-8 text.
@@ -144,6 +151,10 @@ public struct FuzzedDataProvider: Sendable {
 
     /// Consumes a value within `range`, inclusive.
     ///
+    /// Except for a single-value range, consumes up to the integer type's full
+    /// width, even for a small range. Collection selection uses a compact
+    /// index instead; see ``element(of:)``.
+    ///
     /// The result is uniform over the range only when the range's size is a
     /// power of two; otherwise it is the remainder, which skews slightly toward
     /// the low end. That trade is deliberate — it costs one modulo instead of
@@ -159,7 +170,8 @@ public struct FuzzedDataProvider: Sendable {
         return range.lowerBound &+ T(truncatingIfNeeded: offset)
     }
 
-    /// Consumes one bit's worth of input.
+    /// Consumes one byte from the back and uses its low bit as a Boolean.
+    /// Returns `false` when exhausted.
     public mutating func bool() -> Bool {
         integer(UInt8.self) & 1 == 1
     }
@@ -171,13 +183,29 @@ public struct FuzzedDataProvider: Sendable {
 
     /// Consumes an index and returns that element, or `nil` if `collection` is
     /// empty.
+    ///
+    /// Uses the fewest bytes needed to represent `count - 1`: none for zero
+    /// or one element, one for 2...256, two for 257...65,536, and so on. Bytes
+    /// come from the back, most significant first, with no padding for short
+    /// inputs. The index is reduced modulo the count, so it is biased toward
+    /// lower indices unless the count is a power of two. An exhausted provider
+    /// selects the first element of a nonempty collection.
     public mutating func element<C: Collection>(of collection: C) -> C.Element? {
-        guard !collection.isEmpty else { return nil }
-        let offset = Int(integer(in: 0...UInt64(collection.count - 1)))
+        let count = collection.count
+        guard count > 0 else { return nil }
+        var upperBound = count - 1
+        var index: UInt64 = 0
+        while upperBound > 0 && !isEmpty {
+            index = (index << 8) | UInt64(takeFromBack())
+            upperBound >>= 8
+        }
+        let offset = Int(index % UInt64(count))
         return collection[collection.index(collection.startIndex, offsetBy: offset)]
     }
 
-    /// Consumes a case of `type`, or `nil` if it has none.
+    /// Consumes a compact index into `type.allCases`, using ``element(of:)``,
+    /// or returns `nil` if it has none. Changing the order or number of cases
+    /// can change how saved inputs decode.
     public mutating func caseOf<T: CaseIterable>(_ type: T.Type = T.self) -> T? {
         element(of: Array(T.allCases))
     }
