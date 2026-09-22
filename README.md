@@ -27,7 +27,7 @@ let package = Package(
     platforms: [.macOS(.v26)],
     dependencies: [
         .package(path: "../"),
-        .package(url: "https://github.com/brokenhandsio/swift-fuzz.git", from: "0.4.1"),
+        .package(url: "https://github.com/brokenhandsio/swift-fuzz.git", from: "1.0.0"),
     ],
     targets: []
 )
