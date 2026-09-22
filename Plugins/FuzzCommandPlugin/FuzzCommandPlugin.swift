@@ -109,6 +109,12 @@ struct FuzzCommandPlugin: CommandPlugin {
             "-parse-as-library",
             "-g",
         ]
+        #if os(macOS)
+        // libFuzzer looks up this optional hook dynamically on Darwin. Keep it
+        // when release linking strips unreferenced symbols, or discovery and
+        // input dispatch run without registering any targets.
+        parameters.otherLinkerFlags = ["-u", "_LLVMFuzzerInitialize"]
+        #endif
 
         let result = try packageManager.build(.product(target), parameters: parameters)
 
