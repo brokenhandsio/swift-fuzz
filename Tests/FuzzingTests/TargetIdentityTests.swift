@@ -3,6 +3,13 @@ import Testing
 
 @Suite("Target identity")
 struct TargetIdentityTests {
+    @Test("Native executable names select logical targets, with explicit overrides")
+    func exportedSelection() {
+        let names = ["First", "Second"]
+        #expect(FuzzRunner.targetSelector(explicit: nil, executable: "/out/Second", names: names) == "Second")
+        #expect(FuzzRunner.targetSelector(explicit: "First", executable: "/out/Second", names: names) == "First")
+        #expect(FuzzRunner.targetSelector(explicit: nil, executable: "/out/Unknown", names: names) == nil)
+    }
     @Test("Portable logical names are accepted", arguments: ["A", "_private", "URL-Parser_2", String(repeating: "a", count: 128)])
     func valid(_ name: String) {
         #expect(TargetIdentity.validationError([name]) == nil)

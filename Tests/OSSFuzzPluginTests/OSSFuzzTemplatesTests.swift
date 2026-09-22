@@ -1,88 +1,116 @@
+import Foundation
 import Testing
 
-// `OSSFuzzTemplates.swift` here is a symlink to the plugin's copy — see
-// Tests/FuzzCommandPluginTests for why.
-
-@Suite("OSS-Fuzz templates")
+@Suite("OSS-Fuzz setup")
 struct OSSFuzzTemplatesTests {
-    @Test("The build script sources precompile_swift and uses its flags")
-    func usesSwiftFlags() {
-        let script = OSSFuzzTemplates.buildScript(packageDirectory: "Fuzzing", targets: ["A"])
-        // OSS-Fuzz supplies the sanitizer and static-linking flags this way;
-        // building without them produces a binary that will not run there.
-        #expect(script.contains(". precompile_swift"))
-        #expect(script.contains("swift build -c release $SWIFTFLAGS"))
-    }
-
-    @Test("Every target is built, copied, and given its corpus and dictionary")
-    func packagesEachTarget() {
-        let script = OSSFuzzTemplates.buildScript(packageDirectory: "Fuzzing", targets: ["A", "B"])
-        #expect(script.contains("for target in A B"))
-        #expect(script.contains(#"cp ".build/release/$target" "$OUT/$target""#))
-        #expect(script.contains("_seed_corpus.zip"))
-        #expect(script.contains(#""Dictionaries/$target.dict""#))
-    }
-
-    @Test("It cds into the fuzzing package, whatever it is called")
-    func honoursPackageDirectory() {
-        #expect(OSSFuzzTemplates.buildScript(packageDirectory: "FuzzTesting", targets: ["A"])
-            .contains("cd FuzzTesting"))
-    }
-
-    @Test("Seeds and corpus are gathered without failing on an empty directory")
-    func toleratesMissingDirectories() {
-        // A glob over a missing or empty directory would either error under
-        // `set -u` or pass a literal `*` to zip.
-        let script = OSSFuzzTemplates.buildScript(packageDirectory: "Fuzzing", targets: ["A"])
-        #expect(script.contains("find \"Seeds/$target\" \"Corpus/$target\" -type f"))
-        #expect(!script.contains(#"zip -q -j "$OUT/${target}_seed_corpus.zip" "Seeds/$target"/*"#))
-    }
-
-    @Test("project.yaml declares Swift and only the supported sanitizers")
-    func projectYAML() {
-        let yaml = OSSFuzzTemplates.projectYAML(repository: "https://example.com/x")
-        #expect(yaml.contains("language: swift"))
-        #expect(yaml.contains("- address"))
-        #expect(yaml.contains("- thread"))
-        // OSS-Fuzz does not support UBSan for Swift; declaring it fails the build.
-        #expect(!yaml.contains("- undefined"))
-    }
-
-    @Test("The Dockerfile starts from the Swift builder and clones the repo")
-    func dockerfile() {
-        let file = OSSFuzzTemplates.dockerfile(
-            repository: "https://github.com/you/repo", checkoutName: "repo")
-        #expect(file.contains("FROM gcr.io/oss-fuzz-base/base-builder-swift"))
-        #expect(file.contains("git clone --depth 1 https://github.com/you/repo repo"))
-        #expect(file.contains("WORKDIR $SRC/repo"))
-    }
-
-    @Test("SSH remotes become clonable https URLs", arguments: [
-        ("git@github.com:brokenhandsio/swift-cbor.git", "https://github.com/brokenhandsio/swift-cbor"),
-        ("git@github.com:brokenhandsio/swift-cbor", "https://github.com/brokenhandsio/swift-cbor"),
-        ("ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://github.com/owner/repo", "https://github.com/owner/repo"),
+    @Test("SSH and HTTPS repositories normalize identically", arguments: [
+        "git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo/",
     ])
-    func normalizesRemotes(remote: String, expected: String) {
-        // OSS-Fuzz's builder clones anonymously, so an SSH remote — which is
-        // what `git remote get-url` usually reports — cannot be used as-is.
-        #expect(OSSFuzzTemplates.normalizeRemote(remote) == expected)
+    func remotes(_ remote: String) throws {
+        #expect(OSSFuzzTemplates.normalizeRemote(remote) == "https://github.com/owner/repo")
+        let options = try OSSFuzzConfiguration.parse(["--repository", remote])
+        #expect(options.repository == "https://github.com/owner/repo")
     }
 
-    @Test("Unusable remotes are rejected rather than guessed at", arguments: [
-        "", "   ", "/some/local/path", "file:///tmp/repo",
+    @Test("Unusable or credentialed repository values are rejected", arguments: [
+        "", "/tmp/repo", "file:///tmp/repo", "https://", "https://example.com/", "https://user:secret@example.com/repo",
+        "http://example.com/repo", "https://example.com/repo?token=x", "https://example.com/repo\nRUN bad", "ssh://git@example.com:2222/repo",
     ])
-    func rejectsUnusableRemotes(remote: String) {
+    func invalidRemote(_ remote: String) {
         #expect(OSSFuzzTemplates.normalizeRemote(remote) == nil)
     }
 
-    @Test("The checkout directory drops any .git suffix", arguments: [
-        ("https://github.com/owner/repo", "repo"),
-        ("https://github.com/owner/repo.git", "repo"),
-        ("https://github.com/owner/repo/", "repo"),
+    @Test("Defaults support seeds-only builds independently of upstream Swift")
+    func defaults() throws {
+        let options = try OSSFuzzConfiguration.parse([])
+        #expect(!options.includeCorpus)
+        #expect(options.sanitizers == ["address"])
+        #expect(options.swiftImage.contains("6.3.3-noble@sha256:"))
+        let docker = OSSFuzzTemplates.dockerfile(repository: "https://example.com/repo", checkout: "repo", swiftImage: options.swiftImage)
+        #expect(docker.contains("COPY --from=swift-toolchain /usr /opt/swift/usr"))
+        #expect(docker.contains("WORKDIR /src/repo"))
+        #expect(docker.contains("base-builder-swift:ubuntu-24-04"))
+        #expect(OSSFuzzTemplates.buildScript.contains(". precompile_swift"))
+    }
+
+    @Test("Custom configuration remains explicit")
+    func customOptions() throws {
+        let options = try OSSFuzzConfiguration.parse(["--include-corpus", "--swift-image", "swiftlang/swift:6.4-pinned-noble", "--contact", "owner@example.com", "--sanitizers", "address,thread"])
+        #expect(options.includeCorpus)
+        #expect(options.swiftImage == "swiftlang/swift:6.4-pinned-noble")
+        #expect(options.contact == "owner@example.com")
+        #expect(options.sanitizers == ["address", "thread"])
+        let yaml = OSSFuzzTemplates.projectYAML(repository: "https://example.com/repo", contact: options.contact, sanitizers: options.sanitizers)
+        #expect(yaml.contains("primary_contact: \"owner@example.com\""))
+        #expect(yaml.contains("base_os_version: ubuntu-24-04"))
+        #expect(yaml.contains("- x86_64"))
+        #expect(yaml.contains("- thread"))
+    }
+
+    @Test("Invalid options fail before generation", arguments: [
+        ["--output", "../escape"], ["--output", "/tmp/out"], ["--output", "."], ["--output", "a//b"],
+        ["--swift-image", "image\nRUN bad"], ["--sanitizers", "undefined"], ["--sanitizers", "address,"],
+        ["--contact", "invalid"], ["--repository"], ["--unknown"],
     ])
-    func checkoutNames(repository: String, expected: String) {
-        #expect(OSSFuzzTemplates.checkoutName(for: repository) == expected)
+    func badOptions(_ arguments: [String]) {
+        #expect(throws: OSSFuzzError.self) { try OSSFuzzConfiguration.parse(arguments) }
+    }
+
+    @Test("Root and deeply nested package locations are repository-relative")
+    func paths() throws {
+        let root = URL(fileURLWithPath: "/tmp/swift-fuzz-path-root")
+        let atRoot = try OSSFuzzConfiguration.relativePackagePath(package: root, repositoryRoot: root)
+        let nested = try OSSFuzzConfiguration.relativePackagePath(package: root.appending(path: "Tests/With Space/Fuzzing"), repositoryRoot: root)
+        #expect(atRoot == ".")
+        #expect(nested == "Tests/With Space/Fuzzing")
+        #expect(throws: OSSFuzzError.self) {
+            try OSSFuzzConfiguration.relativePackagePath(package: URL(fileURLWithPath: "/tmp/swift-fuzz-path-root-other"), repositoryRoot: root)
+        }
+    }
+
+    @Test("Regeneration preserves configuration and detects edits to generated helpers")
+    func regeneration() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try OSSFuzzFiles.write(managed: ["helper.py": "original"], initial: ["project.yaml": "contact: first"], to: directory)
+        let yaml = directory.appending(path: "project.yaml")
+        try "contact: customized".write(to: yaml, atomically: true, encoding: .utf8)
+        let preserved = try OSSFuzzFiles.write(managed: ["helper.py": "updated"], initial: ["project.yaml": "contact: replacement"], to: directory)
+        #expect(preserved == ["project.yaml"])
+        let contents = try String(contentsOf: yaml, encoding: .utf8)
+        #expect(contents == "contact: customized")
+        let helper = directory.appending(path: "helper.py")
+        try "custom helper".write(to: helper, atomically: true, encoding: .utf8)
+        #expect(throws: OSSFuzzError.self) {
+            try OSSFuzzFiles.write(managed: ["helper.py": "next", "another": "new"], initial: [:], to: directory)
+        }
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "another").path))
+        let retained = try String(contentsOf: helper, encoding: .utf8)
+        #expect(retained == "custom helper")
+    }
+
+    @Test("Legacy integrations and symlinks are preserved on refusal")
+    func unsafeRegeneration() throws {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? manager.removeItem(at: directory) }
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let build = directory.appending(path: "build.sh")
+        try "custom legacy build".write(to: build, atomically: true, encoding: .utf8)
+        #expect(throws: OSSFuzzError.self) {
+            try OSSFuzzFiles.write(managed: ["helper.py": "new"], initial: ["build.sh": "new"], to: directory)
+        }
+        #expect(!manager.fileExists(atPath: directory.appending(path: "helper.py").path))
+        let original = try String(contentsOf: build, encoding: .utf8)
+        #expect(original == "custom legacy build")
+        try manager.removeItem(at: build)
+        let outside = directory.appending(path: "maintainer.txt")
+        try "keep".write(to: outside, atomically: true, encoding: .utf8)
+        try manager.createSymbolicLink(at: directory.appending(path: "helper.py"), withDestinationURL: outside)
+        #expect(throws: OSSFuzzError.self) {
+            try OSSFuzzFiles.write(managed: ["helper.py": "new"], initial: [:], to: directory)
+        }
+        let retained = try String(contentsOf: outside, encoding: .utf8)
+        #expect(retained == "keep")
     }
 }

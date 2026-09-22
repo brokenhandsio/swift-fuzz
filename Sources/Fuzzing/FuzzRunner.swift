@@ -79,8 +79,9 @@ import Glibc
     /// rejects unknown `-`-prefixed arguments, so the command line is not
     /// available to us for this.
     ///
-    /// When `FUZZ_TARGET` is unset and exactly one target is registered, that
-    /// target is used — the common case of one target per executable.
+    /// When `FUZZ_TARGET` is unset, an executable basename matching a logical
+    /// name selects that target. This lets OSS-Fuzz run each exported binary
+    /// directly. Otherwise a sole registration is used.
     ///
     /// - Note: Called from `LLVMFuzzerInitialize`. Terminates the process with
     ///   an explanatory message if selection is ambiguous or impossible; there
@@ -106,7 +107,9 @@ import Glibc
                 """)
         }
 
-        let requested = environmentValue("FUZZ_TARGET")
+        let requested = targetSelector(
+            explicit: environmentValue("FUZZ_TARGET"),
+            executable: executablePath(), names: registeredNames)
 
         switch (requested, registered.count) {
         case (nil, 1):
@@ -126,6 +129,28 @@ import Glibc
             }
             unsafe selected = match.body
         }
+    }
+
+    static func targetSelector(explicit: String?, executable: String, names: [String]) -> String? {
+        if let explicit { return explicit }
+        let basename = executable.split(separator: "/").last.map(String.init) ?? ""
+        return names.contains(basename) ? basename : nil
+    }
+
+    private static func executablePath() -> String {
+        #if os(Linux)
+        // A C libFuzzer main does not initialize Swift's CommandLine state.
+        // /proc identifies the actual exported executable even under a launcher
+        // that changes argv[0], as OSS-Fuzz's build checks do.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let count = unsafe buffer.withUnsafeMutableBufferPointer { pointer in
+            unsafe readlink("/proc/self/exe", pointer.baseAddress!, pointer.count)
+        }
+        if count > 0, count < buffer.count {
+            return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
+        #endif
+        return CommandLine.arguments.first ?? ""
     }
 
     /// Dispatches one input to the selected target.

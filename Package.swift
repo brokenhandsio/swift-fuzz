@@ -60,7 +60,7 @@ let package = Package(
             capability: .command(
                 intent: .custom(
                     verb: "generate-oss-fuzz-script",
-                    description: "Write an OSS-Fuzz build script for this package."
+                    description: "Set up an OSS-Fuzz project with a pinned Swift toolchain."
                 ),
                 permissions: [
                     .writeToPackageDirectory(reason: "generate-oss-fuzz-script writes the OSS-Fuzz integration files.")

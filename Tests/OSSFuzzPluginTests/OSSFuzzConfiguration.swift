@@ -1,0 +1,1 @@
+../../Plugins/OSSFuzzPlugin/OSSFuzzConfiguration.swift

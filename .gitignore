@@ -13,3 +13,6 @@ Examples/**/Crashes/
 
 # libFuzzer's per-worker logs, written to the working directory by --jobs.
 Examples/**/fuzz-*.log
+
+# Generated integration used by the container validation fixture.
+Examples/OSSFuzzValidation/OSSFuzz/

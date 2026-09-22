@@ -788,30 +788,63 @@ after. Setting `ASAN_SYMBOLIZER_PATH` yourself still wins.
 ## OSS-Fuzz
 
 ```bash
-swift package --allow-writing-to-package-directory generate-oss-fuzz-script
+swift package --allow-writing-to-package-directory generate-oss-fuzz-script \
+  --contact maintainer@example.com
 ```
 
-Writes `OSSFuzz/` containing `build.sh`, `project.yaml`, a `Dockerfile` and a
-README explaining how to test locally and submit. The repository OSS-Fuzz should
-clone is taken from your git `origin` and converted to an https URL, since the
-builder clones anonymously and most remotes are SSH. Pass `--repository` to
-override that. The fuzz target list is read
-from the package rather than typed in, so regenerating after adding a target
-keeps the script correct — a stale `build.sh` only fails inside OSS-Fuzz's
-builder, where the feedback loop is slow.
+Run this in your fuzzing package. It writes `OSSFuzz/` with a Dockerfile,
+`project.yaml`, a customizable `build.sh`, generated build helpers, and
+`validate.sh`. The repository defaults to Git `origin`, with SSH remotes
+converted to anonymous HTTPS; `--repository` overrides it. The package can live
+at any depth inside the repository. Local path dependencies must resolve within
+that checkout, or you must add their checkouts to Dockerfile.
 
-OSS-Fuzz builds with plain `swift build` and its own `$SWIFTFLAGS`; this plugin
-is not involved there. That works because the executable target is C, so the
-graph-wide `-parse-as-library` in `$SWIFTFLAGS` is harmless — the same property
-that makes the paired shape build under either build system.
+The Dockerfile overlays a **pinned Swift 6.3.3 Ubuntu 24.04 toolchain** on the
+OSS-Fuzz Swift builder. Submissions can proceed independently of an upstream
+Swift version update. This default supports paired C-shim targets. For standalone
+targets, pass `--swift-image` with a pinned Swift 6.4 Ubuntu 24.04 image when
+generating, or edit `SWIFT_IMAGE` in an existing Dockerfile. Validate each chosen
+toolchain before submitting. The generated project advertises x86_64 and address
+sanitizer; `--sanitizers address,thread` opts into thread sanitizer. Swift uses
+libFuzzer and supports address and thread sanitizers, as described in the
+[OSS-Fuzz Swift guide](https://google.github.io/oss-fuzz/getting-started/new-project-guide/swift-lang/).
 
-Two constraints worth knowing before you plan a submission:
+Each logical `FuzzTarget` registration is exported as a separate native
+executable, including multiple registrations in one product. Its executable
+basename selects the target; explicit `FUZZ_TARGET` still takes precedence.
+Every build rediscovers registrations and checks package-wide name uniqueness.
+Regenerate after adding or removing executable products.
 
-- OSS-Fuzz's `base-builder-swift` image currently ships **Swift 6.2.3**
-  (Ubuntu 24.04) or 6.1.3 (20.04), so a package requiring 6.3 will not build
-  there until the image is updated.
-- Only the `address` and `thread` sanitizers are supported for Swift. Declaring
-  `undefined` fails the build.
+`Seeds/<Target>` supplies the seed archive. **The entire working `Corpus/` can
+remain gitignored**; pass `--include-corpus` only when you deliberately want it
+packaged too. Nested inputs with duplicate filenames are safe: the archive uses
+content hashes and deduplicates identical data. Empty inputs are valid; hidden
+placeholder files and symlinks are skipped. `Dictionaries/<Target>.dict`,
+`Options/<Target>.options`, and SwiftPM resource bundles are exported too. Options
+default to value profiling and disabled libFuzzer leak checking, matching local
+runs; custom options take precedence. Add other runtime assets to `/out` in
+`build.sh`. Python is used only during the build; bots run the native binaries.
+
+Customize the contact and any native dependencies, then copy the six submission
+files listed in `OSSFuzz/README.md` into `projects/PROJECT` in an OSS-Fuzz checkout.
+From that checkout, run:
+
+```bash
+bash projects/PROJECT/validate.sh PROJECT
+```
+
+This builds the image, checks every advertised sanitizer in the actual runner,
+and generates source coverage using the packaged seeds. Docker and the OSS-Fuzz
+helper's Python dependencies are required. Submit the project directory once
+those checks pass; OSS-Fuzz decides project acceptance.
+
+Regeneration preserves `Dockerfile`, `project.yaml`, and `build.sh`, including
+toolchain and contact edits. Initial options such as `--swift-image` do not change
+those existing files. Generated helpers and configuration are refreshed; edits
+to them are detected and refused before any files are changed. Keep
+`.swift-fuzz-generated.json` in the setup directory for safe regeneration.
+For an older integration without that file, use a new `--output` directory and
+migrate your customizations.
 
 ## Continuous integration
 
@@ -918,6 +951,12 @@ It also builds the actual getting-started snippets, exercises asynchronous
 targets and their timeout behavior in release builds, replays saved crash
 inputs, and minimizes a padded crash. The macOS fuzz job installs a swift.org
 toolchain; the unit-test job continues to check Xcode's toolchain.
+
+The OSS-Fuzz job builds the generated integration in the official builder with
+the pinned Swift overlay, then runs native target checks and coverage in the
+official runner. Its fixture covers multiple products, multiple registrations,
+async execution, resource relocation, duplicate seed basenames, and crash
+artifacts. On a Linux Docker host, run `bash Scripts/check-oss-fuzz.sh` to repeat it.
 
 Documentation is a DocC archive, behind an environment gate so consumers never
 resolve the plugin:

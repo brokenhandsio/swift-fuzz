@@ -20,6 +20,29 @@ permissions:
   contents: read
 
 jobs:
+  oss-fuzz:
+    name: OSS-Fuzz native export and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3.3"
+      - name: Build and validate the generated integration
+        run: bash Scripts/check-oss-fuzz.sh
+      - name: Upload validation logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-fuzz-logs
+          path: |
+            .build/oss-fuzz-validation/*.log
+            .build/oss-fuzz-validation/address/*-crash.log
+            .build/oss-fuzz-validation/coverage/logs/
+            .build/oss-fuzz-validation/coverage/fuzzer_stats/
+          if-no-files-found: ignore
+
   unit:
     name: Unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os == 'Linux' && 'ubuntu-latest' || 'macos-26' }}
