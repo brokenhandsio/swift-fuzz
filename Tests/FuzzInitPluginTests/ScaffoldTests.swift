@@ -70,7 +70,7 @@ struct ScaffoldTests {
     }
 
     @Test("Names that would break the manifest or the filesystem are rejected", arguments: [
-        "", "9leading", "has-hyphen", "has space", "dot.dot", "../escape", "sla/sh",
+        "", "9leading", "has-hyphen", "has space", "dot.dot", "../escape", "sla/sh", "é", String(repeating: "a", count: 129),
     ])
     func rejectsInvalidNames(name: String) {
         #expect(throws: FuzzInitError.self) {

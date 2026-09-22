@@ -417,6 +417,16 @@ The bytes are owned, so the body may keep them. The synchronous `bytes` and
 
 ## Several targets in one executable
 
+Logical target names must be unique across the fuzzing package, ignoring ASCII
+case. Use an ASCII letter or underscore first, then ASCII letters, digits,
+underscores or hyphens, up to 128 bytes. `llvm-symbolizer` and
+`llvm-symbolizer-swift` are reserved. Names identify corpus directories and
+exported executables, so changing one changes the target's input location.
+
+Discovery validates every executable before selecting a target, including when
+its name matches a product. A logical target name takes precedence over a product
+alias; a product name can also select its sole target when no logical name matches.
+
 libFuzzer allows exactly one `LLVMFuzzerTestOneInput` per binary, so swift-fuzz
 dispatches between targets at startup instead. Declare as many as you like in
 one `fuzzTargets` closure:

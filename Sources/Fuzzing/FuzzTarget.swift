@@ -44,8 +44,12 @@ public struct FuzzTarget: Sendable {
     /// Creates and registers a fuzz target.
     ///
     /// - Parameters:
-    ///   - name: A unique name. Used to select the target and to name its
-    ///     corpus, dictionary and crash directories.
+    ///   - name: A package-wide name, unique ignoring ASCII case. Start with
+    ///     an ASCII letter or underscore; then use ASCII letters, digits,
+    ///     underscores or hyphens, up to 128 bytes. `llvm-symbolizer` and
+    ///     `llvm-symbolizer-swift` are reserved. Used for selection, input
+    ///     directories and exported executables. Invalid or duplicate names
+    ///     terminate registration with a diagnostic.
     ///   - body: The code under test.
     @discardableResult
     public init(

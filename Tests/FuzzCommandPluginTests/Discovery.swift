@@ -1,0 +1,1 @@
+../../Plugins/FuzzCommandPlugin/Discovery.swift

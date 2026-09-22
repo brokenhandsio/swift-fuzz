@@ -32,7 +32,8 @@ struct FuzzCommandPlugin: CommandPlugin {
             }
         }
 
-        let discovery = Discovery(context: context) { product in
+        let products = context.package.products.compactMap { $0 as? ExecutableProduct }.map(\.name).sorted()
+        let discovery = Discovery(products: products) { product in
             try build(target: product, options: options, context: context)
         }
 

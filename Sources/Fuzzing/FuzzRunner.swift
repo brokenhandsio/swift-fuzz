@@ -62,6 +62,9 @@ import Glibc
 
     /// Registers a target. Called by ``FuzzTarget/init(_:_:)``.
     static func register(_ target: FuzzTarget) {
+        if let error = TargetIdentity.validationError(registeredNames + [target.name]) {
+            fail(error)
+        }
         registered.append(target)
     }
 

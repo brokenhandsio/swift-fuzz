@@ -1,5 +1,4 @@
 import Foundation
-import PackagePlugin
 
 /// Works out which executable to build and which fuzz target inside it to run.
 ///
@@ -23,13 +22,9 @@ struct Discovery {
         let target: String
     }
 
-    let context: PluginContext
+    let products: [String]
     /// Builds a product and returns its executable.
     let build: (String) throws -> URL
-
-    private var products: [String] {
-        context.package.products.compactMap { $0 as? ExecutableProduct }.map(\.name)
-    }
 
     /// Builds `product` and asks it what it registers.
     func inspect(_ product: String) throws -> Executable {
@@ -37,18 +32,29 @@ struct Discovery {
         // No target and no symbolizer: this only asks the binary what it
         // registers, and exits before running anything.
         let environment = FuzzEnvironment.make(target: nil, symbolizer: nil, listTargets: true)
-        let output = try Process.captureOutput(binary, [], environment: environment) ?? ""
+        guard let output = try Process.captureOutput(
+            binary, [], environment: environment, inheritStandardError: true
+        ) else {
+            throw FuzzError("Could not discover fuzz targets in \(String(reflecting: product)); see the executable's diagnostic above.")
+        }
         let targets = output
             .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+            .map(String.init)
+        guard !targets.isEmpty else {
+            throw FuzzError("\(String(reflecting: product)) did not report any fuzz targets.")
+        }
+        if let error = TargetIdentity.validationError(targets) { throw FuzzError(error) }
         return Executable(product: product, binary: binary, targets: targets)
     }
 
-    /// Every fuzz target in the package. Builds each executable, so it is only
-    /// used for `--list` and for error messages.
+    /// Every fuzz target in the package, validated before selecting any one.
+    /// Building all products is necessary to detect cross-product collisions.
     func all() throws -> [Executable] {
-        try products.map { try inspect($0) }
+        let executables = try products.map { try inspect($0) }
+        if let error = TargetIdentity.validationError(executables.flatMap(\.targets)) {
+            throw FuzzError(error)
+        }
+        return executables
     }
 
     func resolve(requested: String?) throws -> Resolution {
@@ -59,27 +65,7 @@ struct Discovery {
                 """)
         }
 
-        // Fast path: the name is a product. Covers one-target-per-executable,
-        // which is the common layout, and avoids building anything else.
-        if let requested, products.contains(requested) {
-            let executable = try inspect(requested)
-            if executable.targets.contains(requested) {
-                return Resolution(binary: executable.binary, target: requested)
-            }
-            // A product whose single target is named differently: unambiguous,
-            // so run it rather than being pedantic about the mismatch.
-            if executable.targets.count == 1 {
-                return Resolution(binary: executable.binary, target: executable.targets[0])
-            }
-            throw FuzzError("""
-                "\(requested)" builds, but registers \(executable.targets.count) fuzz targets and \
-                none is called "\(requested)".
-                Pick one: \(executable.targets.joined(separator: ", "))
-                """)
-        }
-
-        // Otherwise the name (or the absence of one) has to be matched against
-        // what the executables actually register, which means building them.
+        // No product-name shortcut: it could hide a duplicate in another binary.
         let executables = try all()
         let everything = executables.flatMap { executable in
             executable.targets.map { (product: executable.product, target: $0, binary: executable.binary) }
@@ -99,12 +85,13 @@ struct Discovery {
         if matches.count == 1 {
             return Resolution(binary: matches[0].binary, target: matches[0].target)
         }
-        if matches.count > 1 {
-            throw FuzzError("""
-                "\(requested)" is registered by more than one executable \
-                (\(matches.map(\.product).joined(separator: ", "))). Fuzz target names must be \
-                unique across the package.
-                """)
+        // Logical target names win over product aliases. A product is a useful
+        // shorthand only when it holds a single target and no target has that name.
+        if let executable = executables.first(where: { $0.product == requested }) {
+            if executable.targets.count == 1 {
+                return Resolution(binary: executable.binary, target: executable.targets[0])
+            }
+            throw FuzzError("\(String(reflecting: requested)) registers several targets. Pick one: \(executable.targets.joined(separator: ", ")).")
         }
         throw FuzzError("""
             No fuzz target named "\(requested)".

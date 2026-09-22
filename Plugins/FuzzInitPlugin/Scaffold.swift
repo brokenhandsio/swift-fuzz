@@ -111,6 +111,7 @@ enum Scaffold {
     /// Checked before anything is written, so a bad name fails cleanly rather
     /// than leaving half a target behind for the user to delete.
     static func validate(name: String) throws {
+        if let error = TargetIdentity.validationError([name]) { throw FuzzInitError(error) }
         guard !name.isEmpty else {
             throw FuzzInitError("The target name cannot be empty.")
         }

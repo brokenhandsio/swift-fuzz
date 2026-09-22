@@ -4,7 +4,8 @@ extension Process {
     /// Runs a tool with an environment and returns its standard output, or nil
     /// if it exited non-zero.
     static func captureOutput(
-        _ executable: URL, _ arguments: [String], environment: [String: String]
+        _ executable: URL, _ arguments: [String], environment: [String: String],
+        inheritStandardError: Bool = false
     ) throws -> String? {
         let process = Process()
         process.executableURL = executable
@@ -12,11 +13,11 @@ extension Process {
         process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        if !inheritStandardError { process.standardError = FileHandle.nullDevice }
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
 
