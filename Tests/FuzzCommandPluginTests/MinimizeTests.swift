@@ -81,33 +81,12 @@ struct MinimizeTests {
             try Data([1, 2, 3]).write(to: seed)
             try Data([1, 2, 3]).write(to: corpusInput)
             binary = root.appending(path: "engine")
-            let script = """
-                #!/bin/sh
-                set -eu
-                echo "$*" >> arguments
-                merge=0
-                destination=
-                for arg in "$@"; do
-                  case "$arg" in
-                    -merge=1) merge=1 ;;
-                    -merge=0) merge=0 ;;
-                    -*) ;;
-                    *) if [ -z "$destination" ]; then destination="$arg"; fi ;;
-                  esac
-                done
-                if [ "$merge" = 1 ]; then
-                  cp Seeds/Probe/seed "$destination/selected"
-                  touch merged
-                  exit \(mergeStatus)
-                fi
-                if [ -f merged ]; then
-                  \(candidate)
-                else
-                  echo '#2 DONE cov: 10 ft: 20' >&2
-                fi
-                """
-            try script.write(to: binary, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+            // Keep the executable immutable while concurrent tests spawn it;
+            // executing freshly written scripts can fail with ETXTBSY on Linux.
+            let script = try #require(Bundle.module.url(forResource: "minimize", withExtension: "sh", subdirectory: "Fixtures"))
+            try FileManager.default.createSymbolicLink(at: binary, withDestinationURL: script)
+            try candidate.write(to: root.appending(path: "candidate.sh"), atomically: true, encoding: .utf8)
+            try String(mergeStatus).write(to: root.appending(path: "merge-status"), atomically: true, encoding: .utf8)
         }
 
         func minimize(passthrough: [String] = []) throws -> Minimize.Result {

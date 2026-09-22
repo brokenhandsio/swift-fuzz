@@ -10,12 +10,12 @@ struct DiscoveryTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        let script = try #require(Bundle.module.url(forResource: "discover", withExtension: "sh", subdirectory: "Fixtures"))
         for (product, output) in outputs {
-            let quoted = "'" + output.replacingOccurrences(of: "'", with: "'\\''") + "'"
-            let script = "#!/bin/sh\nprintf '%s' \(quoted)\nexit \(product == failing ? 1 : 0)\n"
             let binary = directory.appending(path: product)
-            try script.write(to: binary, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+            try FileManager.default.createSymbolicLink(at: binary, withDestinationURL: script)
+            try output.write(to: directory.appending(path: product + ".stdout"), atomically: true, encoding: .utf8)
+            try (product == failing ? "1" : "0").write(to: directory.appending(path: product + ".status"), atomically: true, encoding: .utf8)
         }
         try body(Discovery(products: outputs.map(\.0), build: { directory.appending(path: $0) }))
     }
