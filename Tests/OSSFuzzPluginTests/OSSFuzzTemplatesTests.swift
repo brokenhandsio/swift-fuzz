@@ -25,6 +25,7 @@ struct OSSFuzzTemplatesTests {
         let options = try OSSFuzzConfiguration.parse([])
         #expect(!options.includeCorpus)
         #expect(options.sanitizers == ["address"])
+        #expect(options.excludedTargets.isEmpty)
         #expect(options.swiftImage.contains("6.3.3-noble@sha256:"))
         let docker = OSSFuzzTemplates.dockerfile(repository: "https://example.com/repo", checkout: "repo", swiftImage: options.swiftImage)
         #expect(docker.contains("COPY --from=swift-toolchain /usr /opt/swift/usr"))
@@ -35,11 +36,12 @@ struct OSSFuzzTemplatesTests {
 
     @Test("Custom configuration remains explicit")
     func customOptions() throws {
-        let options = try OSSFuzzConfiguration.parse(["--include-corpus", "--swift-image", "swiftlang/swift:6.4-pinned-noble", "--contact", "owner@example.com", "--sanitizers", "address,thread"])
+        let options = try OSSFuzzConfiguration.parse(["--include-corpus", "--swift-image", "swiftlang/swift:6.4-pinned-noble", "--contact", "owner@example.com", "--sanitizers", "address,thread", "--exclude-target", "KnownCrash", "--exclude-target", "Other-Crash"])
         #expect(options.includeCorpus)
         #expect(options.swiftImage == "swiftlang/swift:6.4-pinned-noble")
         #expect(options.contact == "owner@example.com")
         #expect(options.sanitizers == ["address", "thread"])
+        #expect(options.excludedTargets == ["KnownCrash", "Other-Crash"])
         let yaml = OSSFuzzTemplates.projectYAML(repository: "https://example.com/repo", contact: options.contact, sanitizers: options.sanitizers)
         #expect(yaml.contains("primary_contact: \"owner@example.com\""))
         #expect(yaml.contains("base_os_version: ubuntu-24-04"))
@@ -50,6 +52,8 @@ struct OSSFuzzTemplatesTests {
     @Test("Invalid options fail before generation", arguments: [
         ["--output", "../escape"], ["--output", "/tmp/out"], ["--output", "."], ["--output", "a//b"],
         ["--swift-image", "image\nRUN bad"], ["--sanitizers", "undefined"], ["--sanitizers", "address,"],
+        ["--exclude-target", "../escape"], ["--exclude-target", "llvm-symbolizer"],
+        ["--exclude-target", "Same", "--exclude-target", "same"],
         ["--contact", "invalid"], ["--repository"], ["--unknown"],
     ])
     func badOptions(_ arguments: [String]) {

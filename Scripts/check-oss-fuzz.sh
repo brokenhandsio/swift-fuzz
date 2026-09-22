@@ -57,6 +57,11 @@ for sanitizer in address coverage; do
     -v "$output:/out" "$image" compile > "$results/$sanitizer-build.log" 2>&1
 done
 
+# Registrations from one product share one large static executable, while a
+# different product keeps its own binary.
+test "$(stat -c %i "$results/address/Decode")" = "$(stat -c %i "$results/address/AsyncDecode")"
+test "$(stat -c %i "$results/address/Decode")" != "$(stat -c %i "$results/address/Single")"
+
 docker run --rm --platform linux/amd64 --network none \
   -e SANITIZER=address -e FUZZING_ENGINE=libfuzzer -e FUZZING_LANGUAGE=swift -e ARCHITECTURE=x86_64 \
   -v "$results/address:/out" "$runner" test_all.py > "$results/check-build.log" 2>&1

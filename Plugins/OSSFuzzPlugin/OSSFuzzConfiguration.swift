@@ -13,6 +13,7 @@ struct OSSFuzzConfiguration {
     var swiftImage = defaultSwiftImage
     var includeCorpus = false
     var sanitizers = ["address"]
+    var excludedTargets: [String] = []
 
     static func parse(_ arguments: [String]) throws -> Self {
         var result = Self()
@@ -24,7 +25,7 @@ struct OSSFuzzConfiguration {
             } else if option == "--help" || option == "-h" {
                 throw OSSFuzzError(usage)
             } else {
-                guard ["--repository", "--output", "--contact", "--swift-image", "--sanitizers"].contains(option) else {
+                guard ["--repository", "--output", "--contact", "--swift-image", "--sanitizers", "--exclude-target"].contains(option) else {
                     throw OSSFuzzError("Unexpected argument \(String(reflecting: option)).\n\(usage)")
                 }
                 index += 1
@@ -50,6 +51,14 @@ struct OSSFuzzConfiguration {
                         throw OSSFuzzError("Swift OSS-Fuzz sanitizers must be address, thread, or address,thread. Coverage is validated separately.")
                     }
                     result.sanitizers = values
+                case "--exclude-target":
+                    guard validTargetName(value) else {
+                        throw OSSFuzzError("--exclude-target requires a valid, non-reserved logical target name.")
+                    }
+                    guard !result.excludedTargets.contains(where: { $0.lowercased() == value.lowercased() }) else {
+                        throw OSSFuzzError("--exclude-target was repeated for \(String(reflecting: value)), ignoring case.")
+                    }
+                    result.excludedTargets.append(value)
                 default: break
                 }
             }
@@ -62,6 +71,18 @@ struct OSSFuzzConfiguration {
             throw OSSFuzzError("--output must be a relative directory inside the fuzzing package, without '.' or '..' components.")
         }
         return result
+    }
+
+    private static func validTargetName(_ value: String) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        guard (1...128).contains(scalars.count) else { return false }
+        func isLetter(_ scalar: UnicodeScalar) -> Bool {
+            (65...90).contains(scalar.value) || (97...122).contains(scalar.value)
+        }
+        func isDigit(_ scalar: UnicodeScalar) -> Bool { (48...57).contains(scalar.value) }
+        guard isLetter(scalars[0]) || scalars[0].value == 95 else { return false }
+        guard scalars.dropFirst().allSatisfy({ isLetter($0) || isDigit($0) || $0.value == 95 || $0.value == 45 }) else { return false }
+        return !["llvm-symbolizer", "llvm-symbolizer-swift"].contains(value.lowercased())
     }
 
     static func relativePackagePath(package: URL, repositoryRoot: URL) throws -> String {
@@ -84,6 +105,7 @@ struct OSSFuzzConfiguration {
         --swift-image <ref>  Ubuntu 24.04 Swift image; default is pinned Swift 6.3.3.
                             Standalone targets need an explicitly pinned Swift 6.4 image.
         --sanitizers <list>  Initial sanitizers (default: address); thread is opt-in.
+        --exclude-target <n> Exclude a currently failing target; may be repeated.
         --include-corpus     Include Corpus inputs as well as Seeds.
         """
 }

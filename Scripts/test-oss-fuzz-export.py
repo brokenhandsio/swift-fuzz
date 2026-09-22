@@ -84,5 +84,33 @@ class ExportTests(unittest.TestCase):
                 exporter.checked_names(names)
         self.assertEqual(exporter.checked_names(["Decode", "Other-Target"]), ["Decode", "Other-Target"])
 
+    def test_target_exclusions_are_checked_and_case_insensitive(self):
+        targets = [
+            {"product": "Combined", "target": "Decode"},
+            {"product": "Combined", "target": "KnownCrash"},
+        ]
+        self.assertEqual(exporter.select_targets(targets, ["knowncrash"]), targets[:1])
+        with self.assertRaisesRegex(ValueError, "was not discovered"):
+            exporter.select_targets(targets, ["Typo"])
+        with self.assertRaisesRegex(ValueError, "All discovered"):
+            exporter.select_targets(targets, ["Decode", "KnownCrash"])
+
+    def test_targets_from_one_product_share_one_executable_inode(self):
+        binaries = self.root / "bin"
+        destination = self.root / "stage"
+        binaries.mkdir()
+        destination.mkdir()
+        (binaries / "Combined").write_bytes(b"\x7fELFcombined")
+        (binaries / "Other").write_bytes(b"\x7fELFother")
+        targets = [
+            {"product": "Combined", "target": "Decode"},
+            {"product": "Combined", "target": "AsyncDecode"},
+            {"product": "Other", "target": "Single"},
+        ]
+        exporter.stage_executables(targets, binaries, destination)
+        self.assertEqual((destination / "Decode").stat().st_ino, (destination / "AsyncDecode").stat().st_ino)
+        self.assertNotEqual((destination / "Decode").stat().st_ino, (destination / "Single").stat().st_ino)
+        self.assertTrue((destination / "Decode").stat().st_mode & 0o111)
+
 
 unittest.main()

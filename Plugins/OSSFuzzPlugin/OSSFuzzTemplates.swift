@@ -150,6 +150,12 @@ enum OSSFuzzTemplates {
     target gets its own native executable, selected by its executable basename;
     no shell or Python launcher is needed on the bot. Explicit FUZZ_TARGET still
     overrides selection for manual use. Names must be unique ignoring ASCII case.
+    Targets excluded during setup are omitted; regeneration rejects exclusions
+    that no longer match a registration, so stale names cannot pass silently.
+
+    Logical targets from one product are hard links to one executable in /out.
+    This preserves basename selection without storing the same static Swift
+    binary once per registration. Keep the links intact when copying artifacts.
 
     Seeds/TARGET is packaged by default; Corpus/TARGET is included only when the
     setup command uses --include-corpus. Nested files are supported, duplicate

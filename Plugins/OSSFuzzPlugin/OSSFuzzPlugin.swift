@@ -27,7 +27,8 @@ struct OSSFuzzPlugin: CommandPlugin {
             throw OSSFuzzError("The output must remain inside the fuzzing package, including through symlinks.")
         }
         let configuration: [String: Any] = [
-            "version": 1, "checkout": checkout, "package": relativePath, "products": products, "include_corpus": options.includeCorpus,
+            "version": 1, "checkout": checkout, "package": relativePath, "products": products,
+            "include_corpus": options.includeCorpus, "exclude_targets": options.excludedTargets,
         ]
         let json = try JSONSerialization.data(withJSONObject: configuration, options: [.prettyPrinted, .sortedKeys])
         let preserved = try OSSFuzzFiles.write(managed: [
@@ -43,6 +44,7 @@ struct OSSFuzzPlugin: CommandPlugin {
         print("""
             Wrote OSS-Fuzz setup to \(options.output)/ for \(products.count) executable product(s).
             Logical fuzz targets will be discovered and exported during the OSS-Fuzz build.
+            Excluded logical targets: \(options.excludedTargets.isEmpty ? "none" : options.excludedTargets.joined(separator: ", "))
             Repository: \(repository)
             Package: \(relativePath)
             Swift toolchain: see \(options.output)/Dockerfile.

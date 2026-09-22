@@ -71,6 +71,37 @@ extension OSSFuzzTemplates {
         with (destination / (target + '.options')).open('w') as stream:
             options.write(stream)
 
+    def select_targets(targets, excluded):
+        checked_names([entry['target'] for entry in targets])
+        excluded = checked_names(excluded)
+        discovered = {entry['target'].lower() for entry in targets}
+        missing = [name for name in excluded if name.lower() not in discovered]
+        if missing:
+            raise ValueError('Excluded fuzz target was not discovered: ' + ', '.join(missing))
+        excluded_lower = {name.lower() for name in excluded}
+        selected = [entry for entry in targets if entry['target'].lower() not in excluded_lower]
+        if not selected:
+            raise ValueError('All discovered fuzz targets were excluded.')
+        return selected
+
+    def stage_executables(targets, binary_directory, destination):
+        products = {}
+        for entry in targets:
+            target, product = entry['target'], entry['product']
+            binary = binary_directory / product
+            with binary.open('rb') as stream:
+                signature = stream.read(4)
+            if signature != b'\x7fELF':
+                raise ValueError('Expected a native ELF executable: ' + str(binary))
+            if product not in products:
+                shared = destination / ('.swift-fuzz-product-' + str(len(products)))
+                shutil.copyfile(binary, shared)
+                shared.chmod(0o755)
+                products[product] = shared
+            os.link(products[product], destination / target)
+        for shared in products.values():
+            shared.unlink()
+
     def build(config, source, output, work):
         if os.environ.get('FUZZING_ENGINE', 'libfuzzer') != 'libfuzzer':
             raise ValueError('Swift export supports the libfuzzer engine.')
@@ -126,19 +157,16 @@ extension OSSFuzzTemplates {
                 raise ValueError('No fuzz registrations reported by ' + product)
             checked_names(names)
             targets.extend({'product': product, 'target': name} for name in names)
-        checked_names([entry['target'] for entry in targets])
+        targets = select_targets(targets, config.get('exclude_targets', []))
         # Stage every artifact before replacing any earlier export.
         with tempfile.TemporaryDirectory(prefix='.swift-fuzz-', dir=output) as temporary:
             staging = Path(temporary)
+            # Logical targets in one product are hard links to the same native
+            # binary. Their basenames still select the registration, without
+            # multiplying a large static Swift executable in /out.
+            stage_executables(targets, binary_directory, staging)
             for entry in targets:
-                target, product = entry['target'], entry['product']
-                binary = binary_directory / product
-                with binary.open('rb') as stream:
-                    signature = stream.read(4)
-                if signature != b'\x7fELF':
-                    raise ValueError('Expected a native ELF executable: ' + str(binary))
-                shutil.copyfile(binary, staging / target)
-                (staging / target).chmod(0o755)
+                target = entry['target']
                 package_inputs(package, target, staging, config['include_corpus'])
                 package_options(package, target, staging)
             # SwiftPM resolves Bundle.module relative to the executable when

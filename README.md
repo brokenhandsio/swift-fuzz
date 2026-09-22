@@ -229,6 +229,8 @@ and `--output` to override the repository and destination.
   `--swift-image`.
 - Each logical target becomes a native executable with its seeds, dictionary,
   options and SwiftPM resources. Corpus packaging requires `--include-corpus`.
+- Repeat `--exclude-target` for known failures that cannot pass OSS-Fuzz's build
+  checks yet. The build rejects misspelled exclusions.
 - The default is x86_64 with address sanitizer. `--sanitizers address,thread`
   opts into thread sanitizer; validate every advertised configuration.
 - Regeneration preserves `Dockerfile`, `project.yaml` and `build.sh`, and refuses
