@@ -26,14 +26,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
-      - uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.3.3"
       - name: Build and validate the generated integration
         run: bash Scripts/check-oss-fuzz.sh
       - name: Upload validation logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oss-fuzz-logs
           path: |
@@ -231,7 +228,7 @@ jobs:
 
       - name: Upload fuzzing log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-log-${{ matrix.shape }}-${{ matrix.swift }}
           path: ${{ matrix.path }}/*.log
@@ -243,9 +240,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.3.3"
+      - name: Install the Swift 6.3.3 toolchain
+        run: |
+          curl --fail --location --retry 3 \
+            https://download.swift.org/swiftly/darwin/swiftly-1.2.0.pkg \
+            --output "$RUNNER_TEMP/swiftly.pkg"
+          installer -pkg "$RUNNER_TEMP/swiftly.pkg" -target CurrentUserHomeDirectory
+          swiftly_binary="$HOME/.swiftly/bin/swiftly"
+          "$swiftly_binary" init --no-modify-profile --skip-install --assume-yes
+          "$swiftly_binary" install 6.3.3 --use --assume-yes
+          swift_toolchain=$("$swiftly_binary" use --print-location)
+          echo "$swift_toolchain/usr/bin" >> "$GITHUB_PATH"
+          swift_toolchain_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$swift_toolchain/Info.plist")
+          echo "TOOLCHAINS=$swift_toolchain_id" >> "$GITHUB_ENV"
+          "$swift_toolchain/usr/bin/swift" --version
       - name: Build and replay the README getting-started example
         run: swift Scripts/check-readme.swift --run
       - name: Replay and save the planted crash
@@ -272,7 +280,7 @@ jobs:
           grep -q "BuggyLibrary.swift" coverage.log
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-fuzz-logs
           path: Examples/BuggyLibrary/Fuzzing/*.log
@@ -418,7 +426,7 @@ jobs:
         # upload-artifact rejects. Tar it into a single file first.
         run: tar -C .build/plugins/Swift-DocC/outputs -czf Fuzzing.doccarchive.tgz Fuzzing.doccarchive
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Fuzzing-doccarchive
           path: Fuzzing.doccarchive.tgz

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run on a Linux Docker host with Swift 6.3+. Uses the real OSS-Fuzz images.
+# Run on a Linux Docker host. Swift and OSS-Fuzz run in their official images.
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -9,9 +9,12 @@ context=$(mktemp -d)
 image="swift-fuzz-oss-validation:${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
 trap 'rm -rf "$context"' EXIT
 
-swift package --package-path Examples/OSSFuzzValidation \
-  --allow-writing-to-package-directory generate-oss-fuzz-script \
-  --repository https://github.com/brokenhandsio/swift-fuzz --contact ci@example.com
+swift_image=swift:6.3.3-noble@sha256:8de8ea332a61e961ead4ef41029c2552b18e1a70dd5942d25ecf7d8de2eec5b5
+docker run --rm --platform linux/amd64 --network none \
+  --user "$(id -u):$(id -g)" -v "$root:/src/swift-fuzz" -w /src/swift-fuzz \
+  "$swift_image" swift package --package-path Examples/OSSFuzzValidation \
+    --allow-writing-to-package-directory generate-oss-fuzz-script \
+    --repository https://github.com/brokenhandsio/swift-fuzz --contact ci@example.com
 python3 Scripts/test-oss-fuzz-export.py Examples/OSSFuzzValidation/OSSFuzz/swift-fuzz-build.py
 
 # Test the current checkout, including changes under review. Only tracked files
