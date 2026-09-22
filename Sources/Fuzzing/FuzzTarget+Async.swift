@@ -38,8 +38,8 @@ extension FuzzTarget {
     /// only parses a few bytes — use ``init(_:_:)`` or ``structured(_:_:)`` for
     /// those.
     ///
-    /// - Note: The bytes are copied, so unlike the synchronous forms the body
-    ///   may keep them.
+    /// - Note: The bytes are owned, so the body may keep them, just as with
+    ///   ``bytes(_:_:)`` and ``structured(_:_:)``.
     @discardableResult
     public static func async(
         _ name: String,

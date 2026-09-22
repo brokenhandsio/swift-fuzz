@@ -51,6 +51,26 @@ struct FuzzTargetTests {
         #expect(seen.value == input)
     }
 
+    @Test("A retained structured provider owns its input after the body returns")
+    func structuredProviderOwnsInput() throws {
+        let saved = Box<FuzzedDataProvider?>(nil)
+        let target = FuzzTarget.structured("structured-owned-input") { data in
+            #expect(data.bytes(1) == [1])
+            #expect(data.integer(UInt8.self) == 4)
+            saved.value = data
+        }
+        var input: [UInt8] = [1, 2, 3, 4]
+        unsafe input.withUnsafeMutableBytes { raw in
+            unsafe target.body(UnsafeRawBufferPointer(raw))
+            // Reuse the still-valid input buffer, as libFuzzer may do after
+            // the call. A retained provider must not observe those writes.
+            unsafe raw[1] = 99
+            #expect(saved.value?.bytes(1) == [2])
+        }
+        var retained = try #require(saved.value)
+        #expect(retained.remainingBytes() == [3])
+    }
+
     // Only registration is asserted here. Invoking an asynchronous body means
     // blocking the calling thread while a task runs, and swift-testing runs
     // tests on the cooperative pool — blocking a pool thread from a test is

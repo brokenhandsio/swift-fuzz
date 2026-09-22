@@ -107,13 +107,16 @@ public struct FuzzTarget: Sendable {
     /// initialisers taking a closure are ambiguous whenever the parameter type
     /// cannot be inferred — `{ _ in }` is enough to break it, and the compiler
     /// points at the closure rather than at the choice between them.
+    ///
+    /// The provider owns a copy of the input, so the body may retain it. This
+    /// copies once per execution; ``init(_:_:)`` remains the zero-copy form.
     @discardableResult
     public static func structured(
         _ name: String,
         _ body: @escaping @Sendable (inout FuzzedDataProvider) -> Void
     ) -> FuzzTarget {
         unsafe FuzzTarget(name: name, unsafeBytes: { bytes in
-            var provider = unsafe FuzzedDataProvider(bytes)
+            var provider = FuzzedDataProvider(unsafe [UInt8](bytes))
             body(&provider)
         })
     }

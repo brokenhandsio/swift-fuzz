@@ -4,10 +4,8 @@ import Testing
 
 /// Runs `body` with a provider over `bytes`.
 private func withProvider<T>(_ bytes: [UInt8], _ body: (inout FuzzedDataProvider) -> T) -> T {
-    unsafe bytes.withUnsafeBytes { raw in
-        var provider = unsafe FuzzedDataProvider(raw)
-        return body(&provider)
-    }
+    var provider = FuzzedDataProvider(bytes)
+    return body(&provider)
 }
 
 @Suite("FuzzedDataProvider")
@@ -334,23 +332,38 @@ struct FuzzableTests {
 
 @Suite("Owned input")
 struct OwnedProviderTests {
-    // The asynchronous targets own their bytes, because the input has to
-    // outlive the synchronous call libFuzzer makes. Same behaviour either way.
-    @Test("An array-backed provider behaves like a buffer-backed one")
-    func matchesBorrowed() {
-        let input: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    @Test("Changing the caller's array preserves the provider's input")
+    func ownsInput() {
+        var input: [UInt8] = [1, 2, 3]
+        var provider = FuzzedDataProvider(input)
+        input[1] = 99
+        #expect(provider.remainingBytes() == [1, 2, 3])
+        #expect(input == [1, 99, 3])
+    }
 
-        var owned = FuzzedDataProvider(input)
-        let ownedResult = (owned.integer(in: UInt16(0)...UInt16(1000)), owned.bool(), owned.bytes(3))
+    @Test("Copies preserve the cursor and consume independently")
+    func independentCopies() {
+        var original = FuzzedDataProvider([1, 2, 3, 4, 5])
+        #expect(original.bytes(1) == [1])
+        #expect(original.integer(UInt8.self) == 5)
+        var copy = original
+        #expect(copy.integer(UInt8.self) == 4)
+        #expect(original.bytes(1) == [2])
+        #expect(copy.remainingBytes() == [2, 3])
+        #expect(original.remainingBytes() == [3, 4])
+    }
 
-        let borrowedResult = unsafe input.withUnsafeBytes { raw -> (UInt16, Bool, [UInt8]) in
-            var borrowed = unsafe FuzzedDataProvider(raw)
-            return (borrowed.integer(in: UInt16(0)...UInt16(1000)), borrowed.bool(), borrowed.bytes(3))
+    @Test("A provider can cross a task boundary with its current cursor")
+    func sendableInput() async {
+        var provider = FuzzedDataProvider([1, 2, 3])
+        _ = provider.bytes(1)
+        let snapshot = provider
+        let task = Task.detached { @Sendable in
+            var copy = snapshot
+            return copy.remainingBytes()
         }
-
-        #expect(ownedResult.0 == borrowedResult.0)
-        #expect(ownedResult.1 == borrowedResult.1)
-        #expect(ownedResult.2 == borrowedResult.2)
+        #expect(await task.value == [2, 3])
+        #expect(provider.remainingBytes() == [2, 3])
     }
 
     @Test("An empty array-backed provider is exhausted, not crashing")

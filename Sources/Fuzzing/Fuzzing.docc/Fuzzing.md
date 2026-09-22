@@ -52,6 +52,11 @@ requests truncate — because a fuzzer spends most of its time on tiny inputs, a
 a harness that returns early on short input stops exercising the code it was
 written for.
 
+The provider owns its input and may outlive the body. Copies preserve the
+current consumption position, then advance independently. Structured targets
+copy libFuzzer's input once per execution; the `Span` entry point remains the
+zero-copy option.
+
 ### Asynchronous code
 
 libFuzzer's entry point is a synchronous C function, so there is nowhere to

@@ -28,8 +28,8 @@ Which entry point you want depends on what the code under test takes:
 | `FuzzTarget.structured(_:_:)` | `FuzzedDataProvider` | you need several values out of one input |
 | `FuzzTarget.async(_:_:)` | `[UInt8]`, `async` | the code under test is asynchronous |
 
-`bytes` copies once per execution, which is invisible next to any real parsing
-work. Reach for `Span` when the API can take one directly.
+`bytes` and `structured` copy the input once per execution. Reach for `Span`
+when the API can take one directly and avoiding that copy matters.
 
 ```bash
 swift package --allow-writing-to-package-directory fuzz CBORDecode --time 60
@@ -282,8 +282,9 @@ and copied from LLVM's `FuzzedDataProvider.h`: it keeps the payload contiguous
 at a stable offset, so mutating it does not also shift every control value and
 invalidate what the fuzzer has learned about them.
 
-This is also the form to prefer under `.strictMemorySafety()` — the provider
-owns the unsafe buffer, so the harness needs no `unsafe` of its own.
+The provider owns its input, so it may be retained after the body returns or
+passed across a task boundary. Copies share immutable bytes and consume them
+independently. It needs no `unsafe` in a harness using `.strictMemorySafety()`.
 
 ### Drawing several values
 
@@ -384,7 +385,8 @@ input per execution. Measured on the example target over 15 seconds:
 That overhead is invisible against real asynchronous work and dominant against a
 body that only parses a few bytes, so keep synchronous targets synchronous.
 
-The bytes are copied, so unlike the synchronous forms the body may keep them.
+The bytes are owned, so the body may keep them. The synchronous `bytes` and
+`structured` forms also own their input; only the `Span` form borrows it.
 
 ## Several targets in one executable
 
